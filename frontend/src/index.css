@@ -1,0 +1,9 @@
+*{box-sizing:border-box}html,body,#root{margin:0;height:100%;font-family:system-ui,sans-serif}
+.layout{display:grid;grid-template-columns:360px 1fr;height:100%}
+.panel{padding:16px;overflow:auto;border-right:1px solid #ddd}
+.panel label{display:block;margin:10px 0 4px;font-size:13px;color:#444}
+.panel input,.panel select{width:100%;padding:8px}
+.panel button{margin-top:14px;width:100%;padding:10px;font-weight:600}
+.route{border:1px solid #ddd;border-radius:8px;padding:10px;margin-top:10px}
+.route.best{border-color:#1a7f37}
+#map{height:100%}
