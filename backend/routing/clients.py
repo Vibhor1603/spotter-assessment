@@ -127,13 +127,20 @@ class OSRMRouter:
             # Re-raise empty later if nothing works
             pass
 
+        # Force alternate geometries when OSRM returns <n distinct alternatives.
+        # Try several offset fractions — short corridors often need a wider detour.
         if len(dedupe_routes(collected)) < n:
-            for via_lon, via_lat in perpendicular_offsets((a.lon, a.lat), (b.lon, b.lat)):
-                via = Place("via", via_lon, via_lat)
-                try:
-                    collected.extend(self._fetch([a, via, b], alternatives=1))
-                except Exception:
-                    continue
+            for frac in (0.08, 0.14, 0.22, 0.32):
+                for via_lon, via_lat in perpendicular_offsets(
+                    (a.lon, a.lat), (b.lon, b.lat), fraction=frac
+                ):
+                    via = Place("via", via_lon, via_lat)
+                    try:
+                        collected.extend(self._fetch([a, via, b], alternatives=1))
+                    except Exception:
+                        continue
+                    if len(dedupe_routes(collected)) >= n:
+                        break
                 if len(dedupe_routes(collected)) >= n:
                     break
 
