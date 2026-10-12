@@ -267,9 +267,15 @@ body {
   cursor: pointer;
 }
 .hud-scale {
-  display: flex; justify-content: space-between;
-  margin-top: 4px;
+  display: flex; justify-content: space-between; gap: 8px;
+  margin-top: 6px;
   font-size: 11px; color: var(--muted);
+}
+.hud-scale span:nth-child(2) {
+  color: var(--mist);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  flex: 1;
 }
 
 .map-empty {

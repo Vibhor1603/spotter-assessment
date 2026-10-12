@@ -47,6 +47,7 @@ export default function App() {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
     setBusy(true)
     setErr(null)
     try {
@@ -56,6 +57,8 @@ export default function App() {
       ])
       setOrigin(o)
       setDest(d)
+      setOriginText(o.name)
+      setDestText(d.name)
       const res = await plan({
         origin: o,
         destination: d,
@@ -190,7 +193,13 @@ export default function App() {
       </aside>
 
       <main className="map-pane">
-        <RouteMap data={data} selectedId={selectedId} hour={hour} showHeatmap={showHeatmap} />
+        <RouteMap
+          data={data}
+          selectedId={selectedId}
+          hour={hour}
+          showHeatmap={showHeatmap}
+          onSelectRoute={setSelectedId}
+        />
 
         {data?.heatmap && (
           <div className="map-hud">
@@ -212,7 +221,7 @@ export default function App() {
             />
             <div className="hud-scale">
               <span>0h</span>
-              <span>client-side hour · no refetch</span>
+              <span>+{hour}h · {hourLabel}</span>
               <span>48h</span>
             </div>
           </div>

@@ -20,7 +20,7 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected 
   useEffect(() => {
     if (value.trim().length < 2) { setHits([]); return }
     // Don't re-query if we just selected this exact place
-    if (selected && selected.name === value) { setHits([]); return }
+    if (selected && selected.name === value) { setHits([]); setOpen(false); return }
     const t = setTimeout(async () => {
       setBusy(true)
       try {
@@ -54,6 +54,7 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected 
           placeholder="City, state…"
           onChange={e => { onSelect(null); onChange(e.target.value) }}
           onFocus={() => hits.length && setOpen(true)}
+          onKeyDown={e => { if (e.key === 'Escape') setOpen(false) }}
         />
         {busy && <span className="input-hint" aria-hidden>…</span>}
       </div>
