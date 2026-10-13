@@ -233,42 +233,98 @@ export default function App() {
     ? Math.max(sheetHeight, 96) + 10
     : 16
 
+  const hideChrome = isMobile && !!data && sheetSnap === 'peek'
+
   const panel = (
     <>
-      <header className="flex shrink-0 flex-col gap-1.5" data-sheet-chrome>
+      {!hideChrome && (
+        <header className="flex shrink-0 flex-col gap-1.5" data-sheet-chrome>
           <div className="flex items-center gap-2">
             <img
-              className="block h-7 w-7 shrink-0 rounded-md"
-            src="/spotter-logo.png"
-            alt="spotter.ai"
-            width={32}
-            height={32}
-          />
-          <span className="text-[1.2rem] font-semibold tracking-tight text-white leading-none">spotter.ai</span>
-        </div>
-        {!data && (
-          <p className="m-0 text-[13px] font-normal tracking-tight leading-snug text-muted">
-            Safest route for your load
-          </p>
-        )}
-      </header>
+              className="block h-8 w-8 shrink-0 rounded-md"
+              src="/spotter-logo.png"
+              alt="spotter.ai"
+              width={32}
+              height={32}
+            />
+            <span className="text-[1.2rem] font-semibold tracking-tight text-white leading-none">spotter.ai</span>
+          </div>
+          {!data && (
+            <p className="m-0 text-[13px] font-normal tracking-tight leading-snug text-muted">
+              Safest route for your load
+            </p>
+          )}
+        </header>
+      )}
 
-      {data && (
+      {/* Mobile: trip chip always; swipe cards only at peek (half/full use vertical list) */}
+      {data && isMobile && (
+        <div data-sheet-peek-body data-sheet-chrome className="flex shrink-0 flex-col gap-2">
+          <button
+            type="button"
+            className={cn(
+              'group flex min-h-11 w-full cursor-pointer flex-col gap-0.5 rounded-xl border border-line bg-surface/80 px-3 py-2.5 text-left font-sans',
+              'shadow-[inset_0_1px_0_rgba(197,225,229,0.05)]',
+              'transition-[background,border-color,transform] duration-160 ease-out-strong',
+              'hover:border-mint/28 hover:bg-surface-2/80 active:scale-[0.985]',
+              'focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(13,124,130,0.28)]',
+            )}
+            onClick={() => {
+              setFormOpen(true)
+              setSheetSnap('full')
+            }}
+            aria-expanded={formOpen}
+            aria-controls="trip-form-panel"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">Your trip</span>
+              <span className="text-[12px] font-semibold tracking-tight text-mint">Edit</span>
+            </div>
+            <p className="m-0 truncate text-[13px] font-medium tracking-tight text-mist">
+              {shortPlace(originText)} → {shortPlace(destText)}
+            </p>
+          </button>
+          {sheetSnap === 'peek' && (
+            <div
+              className={cn(
+                '-mx-1 flex gap-2 overflow-x-auto overscroll-x-contain px-1 pb-0.5',
+                'snap-x snap-mandatory scroll-px-1',
+                stale && 'opacity-55 saturate-70',
+              )}
+              style={{ WebkitOverflowScrolling: 'touch' }}
+              aria-label="Routes"
+              data-no-drag
+            >
+              {data.routes.map((r, i) => (
+                <RouteCard
+                  key={r.id}
+                  route={r}
+                  rank={i}
+                  recommended={r.id === data.recommended}
+                  selected={r.id === selectedId}
+                  why={undefined}
+                  loadLb={load}
+                  onSelect={() => setSelectedId(r.id)}
+                  compact
+                  className="w-[min(240px,70vw)] shrink-0 snap-start"
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {data && !isMobile && (
         <button
           type="button"
-          data-sheet-chrome
-          data-sheet-peek
           className={cn(
-              'group flex w-full shrink-0 cursor-pointer flex-col gap-0.5 rounded-xl border border-line bg-surface/80 px-3 py-2 text-left font-sans',
-              'shadow-[inset_0_1px_0_rgba(197,225,229,0.05)]',
+            'group flex w-full shrink-0 cursor-pointer flex-col gap-1 rounded-2xl border border-line bg-surface/80 px-3.5 py-3 text-left font-sans',
+            'min-h-11 shadow-[inset_0_1px_0_rgba(197,225,229,0.05)]',
             'transition-[background,border-color,transform] duration-160 ease-out-strong',
             'hover:border-mint/28 hover:bg-surface-2/80 active:scale-[0.985]',
             'focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(13,124,130,0.28)]',
           )}
-          onClick={() => {
-            setFormOpen(o => !o)
-            if (isMobile && !formOpen) setSheetSnap('full')
-          }}
+          onClick={() => setFormOpen(o => !o)}
           aria-expanded={formOpen}
           aria-controls="trip-form-panel"
         >
@@ -276,7 +332,7 @@ export default function App() {
             <span className="text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">
               {formOpen ? 'Trip details' : 'Your trip'}
             </span>
-            <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold tracking-tight text-mint">
+            <span className="inline-flex min-h-11 items-center gap-1.5 text-[12px] font-semibold tracking-tight text-mint">
               {formOpen ? 'Hide' : 'Edit'}
               <svg
                 className={cn(
@@ -300,44 +356,11 @@ export default function App() {
         </button>
       )}
 
-      {/* Mobile peek: horizontal route cards sit high so collapsed sheet still shows them */}
-      {data && isMobile && (
-        <div data-sheet-peek data-sheet-chrome className="shrink-0" data-no-drag>
-          <div
-            className={cn(
-              '-mx-1 flex gap-2.5 overflow-x-auto overscroll-x-contain px-1 pb-1 pt-0.5',
-              'snap-x snap-mandatory scroll-px-1',
-              stale && 'opacity-55 saturate-70',
-            )}
-            style={{ WebkitOverflowScrolling: 'touch' }}
-            aria-label="Routes"
-          >
-            {data.routes.map((r, i) => (
-              <RouteCard
-                key={r.id}
-                route={r}
-                rank={i}
-                recommended={r.id === data.recommended}
-                selected={r.id === selectedId}
-                why={undefined}
-                loadLb={load}
-                onSelect={() => {
-                  setSelectedId(r.id)
-                  setSheetSnap('peek')
-                }}
-                compact
-                className="w-[min(280px,78vw)] shrink-0 snap-start"
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
       <div
         id="trip-form-panel"
         className={cn(
           'grid shrink-0 transition-[grid-template-rows] duration-[260ms] ease-drawer motion-reduce:duration-150',
-          formOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+          formOpen && !(isMobile && sheetSnap === 'peek') ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
         )}
         data-open={formOpen ? 'true' : 'false'}
       >
@@ -369,7 +392,7 @@ export default function App() {
                 <div className="relative ml-[54px] mr-4 flex h-0 items-center justify-end border-t border-line" aria-hidden>
                   <button
                     type="button"
-                    className="absolute right-0 top-1/2 z-4 grid h-8 w-8 -translate-y-1/2 cursor-pointer place-items-center rounded-full border border-line-strong bg-[linear-gradient(180deg,rgba(197,225,229,0.12)_0%,rgba(18,36,40,0.95)_100%)] text-mint shadow-[0_1px_0_rgba(255,255,255,0.06)_inset,0_6px_16px_rgba(0,0,0,0.35),0_0_0_4px_var(--color-surface)] backdrop-blur-[10px] transition-[transform,background,color,border-color] duration-180 ease-out-strong hover:border-mint/40 hover:bg-[linear-gradient(180deg,rgba(26,154,163,0.45)_0%,rgba(13,124,130,0.85)_100%)] hover:text-white active:scale-[0.92] active:rotate-180"
+                    className="absolute right-0 top-1/2 z-4 grid h-11 w-11 -translate-y-1/2 cursor-pointer place-items-center rounded-full border border-line-strong bg-[linear-gradient(180deg,rgba(197,225,229,0.12)_0%,rgba(18,36,40,0.95)_100%)] text-mint shadow-[0_1px_0_rgba(255,255,255,0.06)_inset,0_6px_16px_rgba(0,0,0,0.35),0_0_0_4px_var(--color-surface)] backdrop-blur-[10px] transition-[transform,background,color,border-color] duration-180 ease-out-strong hover:border-mint/40 hover:bg-[linear-gradient(180deg,rgba(26,154,163,0.45)_0%,rgba(13,124,130,0.85)_100%)] hover:text-white active:scale-[0.92] active:rotate-180"
                     onClick={swapEnds}
                     aria-label="Swap origin and destination"
                     tabIndex={formOpen ? 0 : -1}
@@ -485,7 +508,7 @@ export default function App() {
                     <button
                       key={ex.label}
                       type="button"
-                      className="flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-xl border border-line bg-transparent px-3 py-2 text-left font-sans text-[13px] font-medium tracking-tight text-mist transition-[background,border-color,transform] duration-140 ease-out-strong hover:border-mint/28 hover:bg-teal/16 active:scale-[0.985]"
+                      className="flex min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-xl border border-line bg-transparent px-3 py-2.5 text-left font-sans text-[13px] font-medium tracking-tight text-mist transition-[background,border-color,transform] duration-140 ease-out-strong hover:border-mint/28 hover:bg-teal/16 active:scale-[0.985]"
                       onClick={() => applyExample(ex)}
                       tabIndex={formOpen ? 0 : -1}
                     >
@@ -500,7 +523,7 @@ export default function App() {
         </div>
       </div>
 
-      {data && (
+      {data && !(isMobile && sheetSnap === 'peek') && (
         <section
           className={cn(
             'flex min-h-0 flex-1 flex-col gap-3.5',
@@ -529,7 +552,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Desktop: vertical stack. Mobile peek strip is above; full/half can show list too when expanded */}
           {!isMobile && (
             <div className="flex flex-col gap-2">
               {data.routes.map((r, i) => (
@@ -547,7 +569,7 @@ export default function App() {
             </div>
           )}
 
-          {isMobile && sheetSnap !== 'peek' && (
+          {isMobile && (
             <div className="flex flex-col gap-2" data-no-drag>
               {data.routes.map((r, i) => (
                 <RouteCard
@@ -742,7 +764,7 @@ function RouteCard({
       type="button"
       className={cn(
         'w-full animate-rise cursor-pointer rounded-xl border border-line bg-transparent text-left font-sans text-inherit transition-[border-color,transform,background] duration-160 ease-out-strong active:scale-[0.985]',
-        compact ? 'min-h-[44px] p-3' : 'p-3.5',
+        compact ? 'min-h-11 p-2.5' : 'p-3.5',
         recommended && 'border-[#3d9a7a]/45',
         selected && 'border-mint/55 bg-surface',
         className,

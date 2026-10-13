@@ -39,14 +39,16 @@ function safeBottom() {
   return h
 }
 
-function snapHeights(vh: number, peekExtra = 0): Record<SheetSnap, number> {
+function snapHeights(vh: number, peekBody = 0): Record<SheetSnap, number> {
   const sb = safeBottom()
-  const peek = Math.round(120 + sb + peekExtra)
-  const half = Math.round(vh * 0.5)
+  // Handle (~44) + measured peek body (trip + swipe cards), hard-capped so map stays visible
+  const peekRaw = Math.round(44 + sb + Math.max(peekBody, 96))
+  const half = Math.round(vh * 0.48)
   const full = Math.round(Math.min(vh * 0.92, vh - 8))
+  const peek = Math.min(peekRaw, Math.round(vh * 0.34), half - 48)
   return {
-    peek: Math.min(peek, half),
-    half: Math.max(half, peek + 40),
+    peek: Math.max(peek, 120 + sb),
+    half: Math.max(half, peek + 56),
     full: Math.max(full, half + 40),
   }
 }
@@ -85,8 +87,8 @@ export default function BottomSheet({
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [vh, setVh] = useState(() => typeof window !== 'undefined' ? window.innerHeight : 800)
-  const [peekExtra, setPeekExtra] = useState(0)
-  const heights = snapHeights(vh, peekExtra)
+  const [peekBody, setPeekBody] = useState(0)
+  const heights = snapHeights(vh, peekBody)
   const maxH = heights.full
 
   const heightRef = useRef(heights[snap])
@@ -98,7 +100,10 @@ export default function BottomSheet({
     lastY: number
     lastT: number
     velocity: number
+    moved: boolean
+    pointerId: number
   } | null>(null)
+  const DRAG_THRESHOLD = 8
 
   // Keep height in sync when snap or viewport changes (not mid-drag)
   useLayoutEffect(() => {
@@ -106,7 +111,7 @@ export default function BottomSheet({
     const next = heights[snap]
     heightRef.current = next
     setHeight(next)
-  }, [snap, vh, peekExtra, dragging]) // heights derived
+  }, [snap, vh, peekBody, dragging]) // heights derived
 
   useEffect(() => {
     onHeightChange?.(height)
@@ -124,28 +129,28 @@ export default function BottomSheet({
     }
   }, [])
 
-  // Measure peek slots (trip chip + swipe cards) so collapsed height fits them
+  // Measure only dedicated peek body (trip chip + swipe cards)
   useEffect(() => {
     const root = rootRef.current
     if (!root) return
     const measure = () => {
-      const nodes = root.querySelectorAll('[data-sheet-peek]')
-      let total = 0
-      nodes.forEach(n => { total += (n as HTMLElement).offsetHeight })
-      setPeekExtra(Math.max(0, total - 40))
+      const body = root.querySelector('[data-sheet-peek-body]') as HTMLElement | null
+      setPeekBody(body ? body.offsetHeight : 0)
     }
     measure()
+    const body = root.querySelector('[data-sheet-peek-body]')
+    if (!body) return
     const ro = new ResizeObserver(measure)
-    root.querySelectorAll('[data-sheet-peek]').forEach(n => ro.observe(n))
+    ro.observe(body)
     return () => ro.disconnect()
   }, [children])
 
   const commitSnap = useCallback((next: SheetSnap) => {
     onSnapChange(next)
-    const h = snapHeights(window.innerHeight, peekExtra)[next]
+    const h = snapHeights(window.innerHeight, peekBody)[next]
     heightRef.current = h
     setHeight(h)
-  }, [onSnapChange, peekExtra])
+  }, [onSnapChange, peekBody])
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (e.button !== 0) return
@@ -162,7 +167,6 @@ export default function BottomSheet({
     if (!fromHandle && !atTop) return
     if (!fromHandle && !target.closest('[data-sheet-chrome]')) return
 
-    e.currentTarget.setPointerCapture(e.pointerId)
     const now = performance.now()
     drag.current = {
       startY: e.clientY,
@@ -170,14 +174,23 @@ export default function BottomSheet({
       lastY: e.clientY,
       lastT: now,
       velocity: 0,
+      moved: false,
+      pointerId: e.pointerId,
     }
-    setDragging(true)
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     const d = drag.current
     if (!d) return
     const dy = d.startY - e.clientY // up = taller
+    if (!d.moved && Math.abs(d.startY - e.clientY) < DRAG_THRESHOLD) return
+    if (!d.moved) {
+      d.moved = true
+      setDragging(true)
+      try {
+        e.currentTarget.setPointerCapture(d.pointerId)
+      } catch { /* already captured or released */ }
+    }
     const next = Math.min(maxH, Math.max(heights.peek * 0.85, d.startH + dy))
     const now = performance.now()
     const dt = Math.max(1, now - d.lastT)
@@ -189,9 +202,15 @@ export default function BottomSheet({
   }
 
   function onPointerUp() {
-    if (!drag.current) return
-    const v = drag.current.velocity
+    const d = drag.current
+    if (!d) return
     drag.current = null
+    if (!d.moved) {
+      // Pure tap — leave snap to the handle button onClick cycle
+      setDragging(false)
+      return
+    }
+    const v = d.velocity
     setDragging(false)
     const next = nearestSnap(heightRef.current, heights, v)
     commitSnap(next)
@@ -238,6 +257,10 @@ export default function BottomSheet({
           data-sheet-handle
           className="min-h-11 min-w-[44px] cursor-grab border-0 bg-transparent px-8 py-3 active:scale-[0.97] active:cursor-grabbing"
           aria-label={`Sheet ${snap}. Drag to resize.`}
+          onPointerDown={e => {
+            // Keep taps for snap-cycle; drag still works from the chrome strip around the pill
+            e.stopPropagation()
+          }}
           onClick={() => {
             const cycle: SheetSnap[] = ['peek', 'half', 'full']
             const i = cycle.indexOf(snap)
