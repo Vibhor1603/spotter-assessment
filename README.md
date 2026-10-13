@@ -6,11 +6,14 @@ Spotter AI take-home: a React + Django app that helps a truck driver pick the **
 
 | | |
 |---|---|
-| **App** | _Vercel URL after deploy_ |
-| **API** | _Render URL after deploy_ |
-| **Loom** | _walkthrough link_ |
+| **App** | https://spotter-assessment-theta.vercel.app |
+| **API** | https://spotter-assessment-api.vercel.app |
+| **GitHub** | https://github.com/Vibhor1603/spotter-assessment |
+| **Loom** | _add walkthrough link_ |
 
-Try locally: **Denver, CO → Salt Lake City, UT**, load **35,000 lb**, weather every **25 mi**.
+Try: **Denver, CO → Salt Lake City, UT**, load **35,000 lb**, weather every **25 mi**.
+
+Local: `make setup && make dev` → UI http://localhost:5173 · API http://localhost:8000
 
 ## What it does
 
@@ -74,9 +77,12 @@ UI (Vite / MapLibre)
 
 ## Deploy
 
-- **API (Render):** `backend/` · `gunicorn config.wsgi --bind 0.0.0.0:$PORT` · see `backend/render.yaml`  
-  Set `DJANGO_ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=0`.
-- **UI (Vercel):** `frontend/` · set `VITE_API_BASE=https://<api-host>/api` · optional `VITE_MAPTILER_KEY`.
+Hosted on **Vercel** (this submission):
+
+- **UI:** project `spotter-assessment` · root `frontend/` · `VITE_API_BASE` + optional `VITE_MAPTILER_KEY`
+- **API:** project `spotter-assessment-api` · root `backend/` · Django on Vercel (`backend/vercel.json`)
+
+`backend/render.yaml` remains if you prefer Render for the API instead.
 
 ## Assumptions
 
