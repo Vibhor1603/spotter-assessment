@@ -28,6 +28,12 @@ CORS_ALLOWED_ORIGINS = env_list(
     "CORS_ALLOWED_ORIGINS",
     "http://localhost:5173,http://127.0.0.1:5173",
 )
+# Preview + production Vercel frontends (override with CORS_ALLOWED_ORIGINS for stricter prod)
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://[\w-]+-vibhor-sharmas-projects\.vercel\.app$",
+    r"^https://spotter-assessment\.vercel\.app$",
+    r"^https://spotter-assessment-[\w-]+\.vercel\.app$",
+]
 STATIC_URL = "static/"
 USE_TZ = True
 TIME_ZONE = "UTC"
