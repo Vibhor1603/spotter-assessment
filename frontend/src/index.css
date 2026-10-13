@@ -156,11 +156,24 @@
   .map-pop dd { @apply m-0 tabular-nums; }
 }
 
-/* Sheet-open timeline lift on phone */
+/* Larger range thumb on phone for thumb reach */
 @media (max-width: 860px) {
-  [data-sheet="open"] .absolute.inset-x-4.bottom-4,
-  [data-sheet="open"] [aria-label="Forecast timeline"] {
-    bottom: calc(min(62dvh, 560px) + 8px);
+  .timeline-range::-webkit-slider-thumb {
+    width: 28px;
+    height: 28px;
+    margin-top: -11px;
+  }
+  .timeline-range::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+  }
+}
+
+/* Landscape phones: keep sheet usable, prefer half max */
+@media (max-width: 860px) and (orientation: landscape) and (max-height: 500px) {
+  [role="dialog"][data-sheet-snap] {
+    /* BottomSheet computes heights from vh — ensure form fields stay reachable */
+    max-height: 100dvh;
   }
 }
 

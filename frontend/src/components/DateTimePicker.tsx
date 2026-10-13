@@ -168,7 +168,7 @@ export default function DateTimePicker({ id, label, value, onChange }: Props) {
         ref={triggerRef}
         type="button"
         className={cn(
-          'flex w-full cursor-pointer items-center justify-between gap-2.5 rounded-xl border border-line bg-surface px-3.5 py-3 text-left font-sans text-sm font-medium tracking-tight text-mist transition-[border-color,background,transform,box-shadow] duration-150 ease-out-strong active:scale-[0.985] hover:border-line-strong hover:bg-surface-2',
+          'flex min-h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-[10px] border border-line bg-surface px-3 py-1.5 text-left font-sans text-sm font-medium tracking-tight text-mist transition-[border-color,background,transform,box-shadow] duration-150 ease-out-strong active:scale-[0.985] hover:border-line-strong hover:bg-surface-2',
           open && 'border-mint/40 shadow-[0_0_0_3px_rgba(13,124,130,0.22)]',
         )}
         aria-haspopup="dialog"

@@ -59,11 +59,11 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected,
   }, [])
 
   return (
-    <div className="relative grid grid-cols-[28px_1fr] items-start gap-2.5 px-4 pb-3 pt-3.5" ref={box}>
+    <div className="relative grid grid-cols-[28px_1fr] items-start gap-2 px-3.5 pb-2 pt-2.5" ref={box}>
       {mark && (
         <span
           className={cn(
-            'mt-[22px] grid h-[22px] w-[22px] place-items-center rounded-full text-[11px] font-semibold tracking-tight shadow-[0_0_0_3px_rgba(197,225,229,0.12)]',
+            'mt-[18px] grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold tracking-tight shadow-[0_0_0_3px_rgba(197,225,229,0.12)]',
             mark === 'B'
               ? 'bg-teal-bright text-white shadow-[0_0_0_3px_rgba(13,124,130,0.2)]'
               : 'bg-mint text-ink',
@@ -76,7 +76,7 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected,
       <div className="min-w-0">
         <label
           htmlFor={listId}
-          className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.04em] text-muted"
+          className="mb-0.5 block text-[10px] font-semibold uppercase tracking-[0.04em] text-muted"
         >
           {label}
         </label>
@@ -86,7 +86,7 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected,
             value={value}
             autoComplete="off"
             placeholder="City, state…"
-            className="w-full border-0 bg-transparent py-1.5 font-sans text-[15px] font-medium tracking-tight text-mist placeholder:font-normal placeholder:text-muted/55 focus:outline-none"
+            className="min-h-8 w-full border-0 bg-transparent py-1 font-sans text-[14px] font-medium tracking-tight text-mist placeholder:font-normal placeholder:text-muted/55 focus:outline-none"
             onChange={e => {
               active.current = true
               onSelect(null)
@@ -120,7 +120,7 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected,
               <button
                 type="button"
                 role="option"
-                className="w-full cursor-pointer rounded-lg border-0 bg-transparent px-3 py-2.5 text-left font-sans text-[13px] font-normal text-mist transition-colors duration-120 ease-out-strong hover:bg-teal/30"
+                className="min-h-9 w-full cursor-pointer rounded-lg border-0 bg-transparent px-3 py-2 text-left font-sans text-[13px] font-normal text-mist transition-colors duration-120 ease-out-strong hover:bg-teal/30"
                 onClick={() => {
                   onChange(p.name)
                   onSelect(p)

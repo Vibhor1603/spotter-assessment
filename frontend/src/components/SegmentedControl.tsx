@@ -46,7 +46,7 @@ export default function SegmentedControl<T extends string | number>({
 
   return (
     <div
-      className="relative mt-2 flex rounded-[11px] border border-line bg-ink/55 p-0.5"
+      className="relative mt-1.5 flex rounded-[10px] border border-line bg-ink/55 p-0.5"
       role="radiogroup"
       ref={track}
       {...aria}
@@ -68,7 +68,7 @@ export default function SegmentedControl<T extends string | number>({
           data-seg
           aria-checked={o.value === value}
           className={cn(
-            'relative z-1 flex-1 cursor-pointer rounded-lg border-0 bg-transparent px-1.5 py-2 font-sans text-xs font-semibold tracking-tight transition-[color,transform] duration-150 ease-out-strong active:scale-[0.97]',
+            'relative z-1 flex min-h-8 flex-1 cursor-pointer items-center justify-center rounded-lg border-0 bg-transparent px-1.5 py-1.5 font-sans text-xs font-semibold tracking-tight transition-[color,transform] duration-150 ease-out-strong active:scale-[0.97]',
             o.value === value ? 'text-mist' : 'text-muted hover:text-mist/85',
           )}
           onClick={() => onChange(o.value)}

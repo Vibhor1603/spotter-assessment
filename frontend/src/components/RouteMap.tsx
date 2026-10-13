@@ -404,7 +404,8 @@ export default function RouteMap({
       })
     }
 
-    // Invisible fat hit targets for phone taps
+    // Invisible fat hit targets (≥44px feel on phone)
+    const mobile = window.matchMedia('(max-width: 860px)').matches
     if (!m.getLayer('cps-hit')) {
       m.addLayer({
         id: 'cps-hit',
@@ -413,9 +414,9 @@ export default function RouteMap({
         paint: {
           'circle-radius': [
             'interpolate', ['linear'], ['zoom'],
-            4, 16,
-            8, 22,
-            12, 28,
+            4, mobile ? 22 : 16,
+            8, mobile ? 28 : 22,
+            12, mobile ? 34 : 28,
           ],
           'circle-color': '#fff',
           'circle-opacity': 0,
@@ -431,8 +432,8 @@ export default function RouteMap({
         paint: {
           'circle-radius': [
             'case',
-            ['==', ['get', 'selected'], 1], 10,
-            7,
+            ['==', ['get', 'selected'], 1], mobile ? 12 : 10,
+            mobile ? 9 : 7,
           ],
           'circle-color': ['get', 'color'],
           'circle-stroke-color': '#fafbfa',
@@ -648,7 +649,7 @@ export default function RouteMap({
       const mobile = window.matchMedia('(max-width: 860px)').matches
       m.fitBounds(b, {
         padding: mobile
-          ? { top: 72, bottom: 200, left: 36, right: 36 }
+          ? { top: 88, bottom: 220, left: 28, right: 28 }
           : { top: 96, bottom: 120, left: 56, right: 56 },
         maxZoom: 8.2,
         duration: reduceMotion() ? 0 : duration,
