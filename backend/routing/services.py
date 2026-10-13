@@ -49,40 +49,50 @@ def validate_departure(departure: datetime, now: datetime | None = None,
 
 
 def explain_recommendation(ranked: list, summaries: dict) -> str:
-    """Human-readable why the top route won (for UI + Loom)."""
+    """Plain-language why the top route won (for UI + Loom).
+
+    Ranked list is already sorted best→worst; UI labels them Route 1, 2, 3
+    in that order (not by internal OSRM ids). Uses the same rounding as rank_key
+    so we never claim “lower average risk (0.0 vs 0.0)”.
+    """
     if not ranked:
         return "No routes available."
     best = ranked[0]
     b = summaries[best]
     if len(ranked) == 1:
         return (
-            f"Only one distinct route found. Avg risk {b.avg_risk:.2f}, "
-            f"{b.severe_miles:.0f} Severe mi, {b.high_miles:.0f} High mi."
+            f"Only one distinct route found. Average risk {b.avg_risk:.2f}, "
+            f"with {b.severe_miles:.0f} severe miles and {b.high_miles:.0f} high-risk miles."
         )
     second = summaries[ranked[1]]
     reasons = []
     if round(b.no_travel_miles, 3) < round(second.no_travel_miles, 3):
         reasons.append(
-            f"fewer No-Travel miles ({b.no_travel_miles:.1f} vs {second.no_travel_miles:.1f})"
+            f"less No Travel weather ({b.no_travel_miles:.0f} vs "
+            f"{second.no_travel_miles:.0f} miles)"
         )
     if round(b.severe_miles, 3) < round(second.severe_miles, 3):
         reasons.append(
-            f"fewer Severe miles ({b.severe_miles:.1f} vs {second.severe_miles:.1f})"
+            f"fewer Severe miles ({b.severe_miles:.0f} vs {second.severe_miles:.0f})"
         )
     if round(b.high_miles, 3) < round(second.high_miles, 3):
         reasons.append(
-            f"fewer High miles ({b.high_miles:.1f} vs {second.high_miles:.1f})"
+            f"fewer High miles ({b.high_miles:.0f} vs {second.high_miles:.0f})"
         )
-    if round(b.avg_risk, 6) < round(second.avg_risk, 6):
-        reasons.append(f"lower avg risk ({b.avg_risk:.2f} vs {second.avg_risk:.2f})")
-    if b.duration_s < second.duration_s and not reasons:
+    if round(b.avg_risk, 2) < round(second.avg_risk, 2):
         reasons.append(
-            f"shorter time ({b.duration_s / 3600:.1f}h vs {second.duration_s / 3600:.1f}h) "
-            "with equal weather risk"
+            f"lower average risk ({b.avg_risk:.2f} vs {second.avg_risk:.2f})"
         )
+    if not reasons and b.duration_s < second.duration_s:
+        reasons.append(
+            f"same weather risk, but arrives sooner "
+            f"({b.duration_s / 3600:.1f} vs {second.duration_s / 3600:.1f} hours)"
+        )
+    if not reasons and b.duration_s <= second.duration_s:
+        reasons.append("weather looks similar; this one is as fast or faster")
     if not reasons:
-        reasons.append("tied on weather metrics; fastest duration wins")
-    return f"Recommended {best} over {ranked[1]}: " + "; ".join(reasons) + "."
+        reasons.append("weather looks similar on the ranked criteria")
+    return "Route 1 wins over Route 2: " + ", and ".join(reasons) + "."
 
 
 def plan(origin: Place, dest: Place, departure: datetime, load_lb: float, interval_mi: int,
@@ -107,13 +117,25 @@ def plan(origin: Place, dest: Place, departure: datetime, load_lb: float, interv
         )
 
     try:
-        results, summaries = [], []
-        for opt in options:
-            cps = sample_checkpoints(
-                opt.coords, interval_mi, departure, opt.duration_s,
-                cum_time_s=opt.cum_time_s,
+        # Sample all routes first, then ONE batched Open-Meteo call (was N sequential).
+        sampled = [
+            (
+                opt,
+                sample_checkpoints(
+                    opt.coords, interval_mi, departure, opt.duration_s,
+                    cum_time_s=opt.cum_time_s,
+                ),
             )
-            wx = weather.hourly([(c.lon, c.lat) for c in cps])
+            for opt in options
+        ]
+        all_pts = [(c.lon, c.lat) for _, cps in sampled for c in cps]
+        all_wx = weather.hourly(all_pts) if all_pts else []
+
+        results, summaries = [], []
+        cursor = 0
+        for opt, cps in sampled:
+            wx = all_wx[cursor:cursor + len(cps)]
+            cursor += len(cps)
             cp_out, segs = [], []
             for c, w in zip(cps, wx):
                 v = value_at(w, c.eta)
@@ -145,6 +167,11 @@ def plan(origin: Place, dest: Place, departure: datetime, load_lb: float, interv
     except PlanError:
         raise
     except Exception as e:
+        msg = str(e)
+        if "timed out" in msg.lower() or "timeout" in msg.lower():
+            raise UpstreamError(
+                "Weather forecast timed out (Open-Meteo). Wait a few seconds and try again."
+            ) from e
         raise UpstreamError(f"Weather/risk pipeline failed: {e}") from e
 
     ranked = rank_routes(summaries)
@@ -153,12 +180,17 @@ def plan(origin: Place, dest: Place, departure: datetime, load_lb: float, interv
     results.sort(key=lambda r: order.index(r["id"]))
     why = explain_recommendation(order, by_id)
 
-    # Corridor heatmap for the recommended route (single fetch; 48h client-side switch)
-    heatmap = build_heatmap(
-        next(r for r in results if r["id"] == order[0])["geometry"] if order else [],
-        interval_mi=max(interval_mi, 25),
-        weather=weather,
-    )
+    # Corridor heatmap across ALL route alternatives (not only the winner),
+    # so the forecast ribbon covers the trip corridor the driver is comparing.
+    heatmap = {"hours": HEATMAP_HOURS, "times": [], "points": []}
+    try:
+        heatmap = build_heatmap_for_routes(
+            [r["geometry"] for r in results],
+            interval_mi=14,
+            weather=weather,
+        )
+    except Exception:
+        pass
 
     return {
         "recommended": order[0] if order else None,
@@ -169,23 +201,58 @@ def plan(origin: Place, dest: Place, departure: datetime, load_lb: float, interv
     }
 
 
-def build_heatmap(coords: list, interval_mi: float = 25, weather=None,
-                  hours: int = HEATMAP_HOURS) -> dict:
-    """Grid of corridor points each carrying 48 hourly weights for MapLibre.
+def _dedupe_pts(pts: list[tuple[float, float]], min_deg: float = 0.08) -> list[tuple[float, float]]:
+    """Drop samples that sit almost on top of an earlier one (corridor overlap)."""
+    out: list[tuple[float, float]] = []
+    for lon, lat in pts:
+        if any(abs(lon - olon) < min_deg and abs(lat - olat) < min_deg for olon, olat in out):
+            continue
+        out.append((lon, lat))
+    return out
 
-    Frontend stores w0..w{hours-1} as feature properties and updates
-    `heatmap-weight` via setPaintProperty — no refetch on slider move.
+
+def build_heatmap_for_routes(geometries: list, interval_mi: float = 14, weather=None,
+                             hours: int = HEATMAP_HOURS) -> dict:
+    """Heatmap samples along every alternative so the corridor covers the comparison set."""
+    pts: list[tuple[float, float]] = []
+    for coords in geometries:
+        if not coords or len(coords) < 2:
+            continue
+        # Dense centerline + mild side offsets → continuous ribbon, not stop halos
+        pts.extend(corridor_offsets(coords, interval_mi=interval_mi, offset_mi=0.0))
+        pts.extend(corridor_offsets(coords, interval_mi=interval_mi * 1.5, offset_mi=5.0))
+    pts = _dedupe_pts(pts, min_deg=0.04)
+    if len(pts) > 100:
+        step = max(1, len(pts) // 100)
+        pts = pts[::step][:100]
+    return build_heatmap_points(pts, weather=weather, hours=hours)
+
+
+def build_heatmap(coords: list, interval_mi: float = 14, weather=None,
+                  hours: int = HEATMAP_HOURS) -> dict:
+    """Corridor heatmap for MapLibre (0–48h paint-only scrub).
+
+    Dense enough samples that blobs fuse into a ribbon; frontend stores w0..w{n}
+    and updates `heatmap-weight` via setPaintProperty — no refetch on slider.
     """
     if not coords or len(coords) < 2:
         return {"hours": hours, "times": [], "points": []}
+    pts = corridor_offsets(coords, interval_mi=interval_mi, offset_mi=0.0)
+    pts.extend(corridor_offsets(coords, interval_mi=interval_mi * 1.5, offset_mi=5.0))
+    pts = _dedupe_pts(pts, min_deg=0.04)
+    if len(pts) > 100:
+        step = max(1, len(pts) // 100)
+        pts = pts[::step][:100]
+    return build_heatmap_points(pts, weather=weather, hours=hours)
+
+
+def build_heatmap_points(pts: list[tuple[float, float]], weather=None,
+                         hours: int = HEATMAP_HOURS) -> dict:
+    if not pts:
+        return {"hours": hours, "times": [], "points": []}
     weather = weather or OpenMeteoWeather()
-    # Cap points so Open-Meteo URL stays sane (~100)
-    pts = corridor_offsets(coords, interval_mi=interval_mi, offset_mi=8.0)
-    if len(pts) > 90:
-        step = max(1, len(pts) // 90)
-        pts = pts[::step][:90]
     try:
-        wx = weather.hourly(pts, forecast_days=max(3, (hours + 23) // 24))
+        wx = weather.hourly(pts, forecast_days=FORECAST_DAYS)
     except Exception as e:
         raise UpstreamError(f"Heatmap weather failed: {e}") from e
 
@@ -195,9 +262,9 @@ def build_heatmap(coords: list, interval_mi: float = 25, weather=None,
         t, weights = series_weights(payload, hours=hours)
         if not times:
             times = t
-        props = {f"w{i}": round(w, 4) for i, w in enumerate(weights)}
-        # Also expose current hour-0 risk level for legend sampling
-        props["lon"] = lon
-        props["lat"] = lat
-        points.append({"lon": lon, "lat": lat, "weights": [round(w, 4) for w in weights]})
+        points.append({
+            "lon": lon,
+            "lat": lat,
+            "weights": [round(w, 4) for w in weights],
+        })
     return {"hours": hours, "times": times, "points": points}

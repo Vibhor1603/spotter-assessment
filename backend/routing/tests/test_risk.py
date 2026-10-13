@@ -79,3 +79,12 @@ class Ranking(SimpleTestCase):
 
     def test_avg_is_mileage_weighted(self):
         self.assertAlmostEqual(self.s("x", 1, [(30, Risk.SEVERE), (90, Risk.LOW)]).avg_risk, 0.75)
+
+    def test_tiny_avg_noise_does_not_beat_much_shorter_trip(self):
+        # Both ~Low: 1 mi Moderate vs 2 mi Moderate → avg 0.01 vs 0.02, both 0.0 at 1dp.
+        # Longer trip must not win on float noise once avg is rounded to 2dp (both 0.01→0.01? wait)
+        # 1/100 = 0.01 vs 2/100 = 0.02 — 2dp still differs. Use noise below 0.005.
+        a = self.s("long", 20 * 3600, [(0.2, Risk.MODERATE), (99.8, Risk.LOW)])  # avg 0.002
+        b = self.s("short", 9 * 3600, [(0.4, Risk.MODERATE), (99.6, Risk.LOW)])  # avg 0.004
+        # Both round to 0.00 at 2dp → shorter wins
+        self.assertEqual(rank_routes([a, b])[0].route_id, "short")

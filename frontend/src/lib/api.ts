@@ -4,12 +4,32 @@ const BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000/api'
 async function readError(r: Response): Promise<string> {
   try {
     const j = await r.json()
-    if (typeof j?.detail === 'string') return j.detail
-    if (j?.detail) return JSON.stringify(j.detail)
-    return JSON.stringify(j)
+    if (typeof j?.detail === 'string' && j.detail.trim()) {
+      const d = j.detail.trim()
+      // Never surface raw Python / stack fragments if a proxy leaks them
+      if (/traceback|file "|exception:|connectionpool/i.test(d)) {
+        return fallbackForStatus(r.status)
+      }
+      return d
+    }
+    if (j?.detail) return fallbackForStatus(r.status)
+    return fallbackForStatus(r.status)
   } catch {
-    return r.statusText || String(r.status)
+    return fallbackForStatus(r.status)
   }
+}
+
+function fallbackForStatus(status: number): string {
+  if (status === 400) return 'Check origin, destination, departure time, and load weight.'
+  if (status === 502 || status === 503) {
+    return 'Routing or weather service is unavailable. Try again shortly.'
+  }
+  if (status >= 500) return 'Something went wrong. Try again in a moment.'
+  return rStatus(status)
+}
+
+function rStatus(status: number): string {
+  return status ? `Request failed (${status})` : 'Request failed'
 }
 
 export async function geocode(q: string): Promise<Place[]> {

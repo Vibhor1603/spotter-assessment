@@ -122,8 +122,9 @@ def summarize(route_id: str, duration_s: float, segments: Iterable[SegmentRisk])
 def rank_key(r: RouteSummary):
     # ASSUMPTION: No Travel miles rank worse than anything (brief doesn't list them
     # explicitly in the tie-break order). Then brief order: severe, high, avg, time.
+    # avg_risk rounded to 2dp so float noise (~0.001) cannot beat hours of travel time.
     return (round(r.no_travel_miles, 3), round(r.severe_miles, 3),
-            round(r.high_miles, 3), round(r.avg_risk, 6), r.duration_s)
+            round(r.high_miles, 3), round(r.avg_risk, 2), r.duration_s)
 
 
 def rank_routes(routes: Sequence[RouteSummary]) -> list[RouteSummary]:

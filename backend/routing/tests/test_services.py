@@ -127,7 +127,16 @@ class Explain(SimpleTestCase):
         b = summarize("r1", 200, [SegmentRisk(5, Risk.SEVERE), SegmentRisk(95, Risk.LOW)])
         text = explain_recommendation(["r1", "r0"], {"r0": a, "r1": b})
         self.assertIn("Severe", text)
-        self.assertIn("r1", text)
+        # Display order: ranked list is Route 1 (best) vs Route 2
+        self.assertIn("Route 1 wins over Route 2", text)
+
+    def test_explain_equal_avg_uses_time_not_zero_vs_zero(self):
+        a = summarize("r0", 20 * 3600, [SegmentRisk(100, Risk.LOW)])
+        b = summarize("r1", 9 * 3600, [SegmentRisk(100, Risk.LOW)])
+        text = explain_recommendation(["r1", "r0"], {"r0": a, "r1": b})
+        self.assertNotIn("0.0 vs 0.0", text)
+        self.assertNotIn("lower average risk", text)
+        self.assertIn("arrives sooner", text)
 
 
 class Heatmap(SimpleTestCase):
@@ -136,6 +145,7 @@ class Heatmap(SimpleTestCase):
         hm = build_heatmap(coords, interval_mi=50, weather=FakeWeather(wind=40), hours=48)
         self.assertEqual(hm["hours"], 48)
         self.assertEqual(len(hm["times"]), 48)
+        self.assertTrue(hm["times"][0].endswith("Z"), hm["times"][0])
         self.assertGreater(len(hm["points"]), 0)
         self.assertEqual(len(hm["points"][0]["weights"]), 48)
         # High wind -> weight closer to 1 than calm

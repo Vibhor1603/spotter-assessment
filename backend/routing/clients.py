@@ -6,27 +6,50 @@ NOTE: OSRM public demo is car profile only and rate-limited; fine for a demo,
 mention in README/Loom. OpenRouteService has driving-hgv (needs free key).
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import sleep
 from typing import Protocol, Sequence
+import re
 import requests
 from django.conf import settings
 from django.core.cache import cache
 
 from .geo import perpendicular_offsets, dedupe_routes
 
-TIMEOUT = 20
+TIMEOUT = 12          # fail fast on public demos
+VIA_TIMEOUT = 8
+# Open-Meteo multi-point forecasts are heavier; allow longer read + retries.
+WEATHER_TIMEOUT = (5, 28)  # (connect, read) seconds
+WEATHER_RETRIES = 3
 WEATHER_CACHE_TTL = 1800  # 30 min
 GEO_CACHE_TTL = 3600
 FORECAST_DAYS = 3  # trip planning window (Open-Meteo max 16)
 HEATMAP_HOURS = 48
 
+_session = requests.Session()
 
-def _get(url, params):
-    r = requests.get(url, params=params, timeout=TIMEOUT,
-                     headers={"User-Agent": settings.HTTP_USER_AGENT})
-    r.raise_for_status()
-    return r.json()
+
+def _get(url, params, timeout: float | tuple[float, float] = TIMEOUT, retries: int = 1):
+    """GET JSON with optional retries on timeout / connection errors."""
+    last: Exception | None = None
+    attempts = max(1, retries)
+    for attempt in range(attempts):
+        try:
+            r = _session.get(
+                url, params=params, timeout=timeout,
+                headers={"User-Agent": settings.HTTP_USER_AGENT},
+            )
+            r.raise_for_status()
+            return r.json()
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last = e
+            if attempt + 1 >= attempts:
+                break
+            sleep(0.4 * (2 ** attempt))  # 0.4s, 0.8s, …
+    assert last is not None
+    raise last
 
 
 @dataclass
@@ -82,33 +105,39 @@ def _cum_from_annotation(duration_list: list[float]) -> list[float]:
 
 
 class OSRMRouter:
-    """OSRM with alternatives + via-waypoint fallback to aim for 3 distinct routes."""
+    """OSRM with alternatives + parallel via-waypoint fallback for 3 routes."""
 
-    def _fetch(self, waypoints: Sequence[Place], alternatives: int = 3) -> list[RouteOption]:
+    def _fetch(
+        self,
+        waypoints: Sequence[Place],
+        alternatives: int = 3,
+        *,
+        annotate: bool = True,
+        timeout: float = TIMEOUT,
+    ) -> list[RouteOption]:
         coords = ";".join(f"{p.lon},{p.lat}" for p in waypoints)
         url = f"{settings.OSRM_BASE_URL}/route/v1/driving/{coords}"
-        data = _get(url, {
+        params = {
             "alternatives": alternatives if len(waypoints) == 2 else "false",
             "overview": "full",
             "geometries": "geojson",
-            "annotations": "duration",
-        })
+        }
+        if annotate:
+            params["annotations"] = "duration"
+        data = _get(url, params, timeout=timeout)
         if data.get("code") != "Ok":
             raise RuntimeError(f"OSRM error: {data.get('code')}")
         out = []
         for i, r in enumerate(data["routes"]):
             legs = r.get("legs") or []
             cum = None
-            # Prefer per-leg annotation durations when present
-            if legs and "annotation" in legs[0] and legs[0]["annotation"].get("duration"):
+            if annotate and legs and "annotation" in legs[0] and legs[0]["annotation"].get("duration"):
                 parts: list[float] = []
                 for leg in legs:
                     parts.extend(leg["annotation"]["duration"])
                 cum = _cum_from_annotation(parts)
-                # Ensure length matches geometry vertices
                 n_verts = len(r["geometry"]["coordinates"])
                 if len(cum) != n_verts:
-                    # Fall back to uniform if mismatch (via routes with multi-leg)
                     cum = None
             out.append(RouteOption(
                 id=f"tmp{i}",
@@ -124,25 +153,31 @@ class OSRMRouter:
         try:
             collected.extend(self._fetch([a, b], alternatives=max(n, 3)))
         except Exception:
-            # Re-raise empty later if nothing works
             pass
 
-        # Force alternate geometries when OSRM returns <n distinct alternatives.
-        # Try several offset fractions — short corridors often need a wider detour.
+        # Parallel via-detours when OSRM returns <n alternatives (was sequential & slow).
         if len(dedupe_routes(collected)) < n:
-            for frac in (0.08, 0.14, 0.22, 0.32):
+            jobs: list[Place] = []
+            for frac in (0.12, 0.28):
                 for via_lon, via_lat in perpendicular_offsets(
                     (a.lon, a.lat), (b.lon, b.lat), fraction=frac
                 ):
-                    via = Place("via", via_lon, via_lat)
+                    jobs.append(Place("via", via_lon, via_lat))
+
+            def _via(via: Place) -> list[RouteOption]:
+                return self._fetch(
+                    [a, via, b], alternatives=1, annotate=False, timeout=VIA_TIMEOUT,
+                )
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = [pool.submit(_via, via) for via in jobs]
+                for fut in as_completed(futures):
                     try:
-                        collected.extend(self._fetch([a, via, b], alternatives=1))
+                        collected.extend(fut.result())
                     except Exception:
                         continue
                     if len(dedupe_routes(collected)) >= n:
                         break
-                if len(dedupe_routes(collected)) >= n:
-                    break
 
         unique = dedupe_routes(collected)[:n]
         if not unique:
@@ -156,14 +191,14 @@ class OpenMeteoWeather:
     """Hourly forecast in imperial units directly (wind mph, precip inch).
     Open-Meteo `snowfall` with precipitation_unit=inch is inches of snow
     (metric default is cm; see risk.cm_to_in if you switch units)."""
-    HOURLY = "wind_speed_10m,wind_gusts_10m,precipitation,rain,snowfall"
-    CHUNK = 80  # keep URL size sane
+    # Drop unused gusts — smaller payloads, faster multi-point calls
+    HOURLY = "wind_speed_10m,precipitation,rain,snowfall"
+    CHUNK = 40  # smaller batches = fewer Open-Meteo timeouts
 
     def _cache_key(self, lon: float, lat: float, forecast_days: int) -> str:
         return f"wx:{lat:.3f}:{lon:.3f}:d{forecast_days}"
 
     def _fetch_chunk(self, points: Sequence[tuple[float, float]], forecast_days: int) -> list[dict]:
-        # Serve from cache when every point is warm
         cached = []
         missing_idx = []
         for i, (lon, lat) in enumerate(points):
@@ -181,11 +216,16 @@ class OpenMeteoWeather:
             miss_pts = [points[i] for i in missing_idx]
             lats = ",".join(f"{p[1]:.4f}" for p in miss_pts)
             lons = ",".join(f"{p[0]:.4f}" for p in miss_pts)
-            data = _get(f"{settings.OPEN_METEO_BASE_URL}/v1/forecast", {
-                "latitude": lats, "longitude": lons, "hourly": self.HOURLY,
-                "wind_speed_unit": "mph", "precipitation_unit": "inch",
-                "timezone": "UTC", "forecast_days": forecast_days,
-            })
+            data = _get(
+                f"{settings.OPEN_METEO_BASE_URL}/v1/forecast",
+                {
+                    "latitude": lats, "longitude": lons, "hourly": self.HOURLY,
+                    "wind_speed_unit": "mph", "precipitation_unit": "inch",
+                    "timezone": "UTC", "forecast_days": forecast_days,
+                },
+                timeout=WEATHER_TIMEOUT,
+                retries=WEATHER_RETRIES,
+            )
             payloads = data if isinstance(data, list) else [data]
             for j, payload in enumerate(payloads):
                 idx = missing_idx[j]
@@ -198,10 +238,23 @@ class OpenMeteoWeather:
     def hourly(self, points, forecast_days: int = FORECAST_DAYS):
         if not points:
             return []
-        out: list[dict] = []
-        for i in range(0, len(points), self.CHUNK):
-            out.extend(self._fetch_chunk(points[i:i + self.CHUNK], forecast_days))
-        return out
+        # Parallel chunk fetches when a long corridor needs >1 Open-Meteo call
+        chunks = [points[i:i + self.CHUNK] for i in range(0, len(points), self.CHUNK)]
+        if len(chunks) == 1:
+            return self._fetch_chunk(chunks[0], forecast_days)
+        out: list[dict | None] = [None] * len(chunks)
+        # Cap concurrency — Open-Meteo free tier stalls under 4 parallel multi-point calls.
+        with ThreadPoolExecutor(max_workers=min(2, len(chunks))) as pool:
+            futs = {
+                pool.submit(self._fetch_chunk, chunk, forecast_days): i
+                for i, chunk in enumerate(chunks)
+            }
+            for fut in as_completed(futs):
+                out[futs[fut]] = fut.result()
+        flat: list[dict] = []
+        for part in out:
+            flat.extend(part or [])
+        return flat
 
 
 def value_at(hourly_payload: dict, when: datetime) -> dict:
@@ -216,18 +269,28 @@ def value_at(hourly_payload: dict, when: datetime) -> dict:
 def series_weights(hourly_payload: dict, hours: int = HEATMAP_HOURS) -> tuple[list[str], list[float]]:
     """Return (times[:hours], risk-weight 0..1) for heatmap paint properties.
 
-    Weight uses wind mph normalised against No-Travel threshold (55), blended
-    with rain/snow intensity so the heatmap reacts to all three hazards.
+    Times are UTC ISO strings with a Z suffix so the frontend does not
+    mis-parse them as local wall-clock. Weight floor stays >0 so the
+    corridor heatmap remains visible even in calm weather.
     """
-    from .risk import classify_wind, classify_rain, classify_snow, Risk
+    from .risk import classify_wind, classify_rain, classify_snow
     h = hourly_payload["hourly"]
-    times = h["time"][:hours]
+    raw_times = h["time"][:hours]
+    times = []
+    naive_utc = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$")
+    for t in raw_times:
+        # Open-Meteo UTC times look like "2026-10-13T12:00" (no offset).
+        # Append Z so JS Date parses them as UTC, not local wall-clock.
+        if isinstance(t, str) and naive_utc.match(t):
+            times.append(t + "Z")
+        else:
+            times.append(t)
     weights = []
     for i in range(len(times)):
         wind = h["wind_speed_10m"][i] or 0
         rain = h["rain"][i] or 0
         snow = h["snowfall"][i] or 0
         level = max(classify_wind(wind), classify_rain(rain), classify_snow(snow))
-        # Map Risk 0..4 -> weight 0.05..1.0 (MapLibre heatmap needs >0 to show)
-        weights.append(0.05 + 0.2375 * int(level))
+        # Map Risk 0..4 -> weight 0.28..1.0 (calm still a soft corridor; severe punches)
+        weights.append(0.28 + 0.18 * int(level))
     return times, weights

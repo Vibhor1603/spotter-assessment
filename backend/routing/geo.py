@@ -82,7 +82,12 @@ def corridor_offsets(
     interval_mi: float,
     offset_mi: float = 8.0,
 ) -> list[tuple[float, float]]:
-    """Sample points along the polyline plus left/right lateral offsets for heatmap."""
+    """Sample points along the polyline.
+
+    When ``offset_mi > 0``, also emits left/right lateral offsets (older
+    heatmap look — tends to stamp elongated “pills”). Prefer ``offset_mi=0``
+    for a continuous centerline ribbon.
+    """
     if len(coords) < 2:
         return []
     # Build sparse samples along the line
@@ -109,9 +114,10 @@ def corridor_offsets(
         lat = coords[j][1] + f * (coords[j + 1][1] - coords[j][1])
         pt = (lon, lat)
         points.append(pt)
-        br = bearing_deg(coords[j], coords[j + 1])
-        points.append(destination_point(pt, (br + 90) % 360, offset_mi))
-        points.append(destination_point(pt, (br - 90) % 360, offset_mi))
+        if offset_mi > 0:
+            br = bearing_deg(coords[j], coords[j + 1])
+            points.append(destination_point(pt, (br + 90) % 360, offset_mi))
+            points.append(destination_point(pt, (br - 90) % 360, offset_mi))
     return points
 
 

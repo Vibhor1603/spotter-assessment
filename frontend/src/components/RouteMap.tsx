@@ -11,62 +11,54 @@ import type {
   MapMouseEvent,
   MapGeoJSONFeature,
   GeoJSONSource,
-  StyleSpecification,
 } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import type { Checkpoint, PlanResponse } from '../lib/types'
-import { RISK_COLORS } from '../lib/types'
+import type { Checkpoint, PlanResponse, RouteResult } from '../lib/types'
+import {
+  RISK_COLORS,
+  routeRankLabel,
+  truckPositionAt,
+} from '../lib/types'
+import { formatLocalDateTime, parseUTC } from '../lib/time'
+import {
+  applySpotterBasemapTheme,
+  basemapStyleUrl,
+  pickLabelFont,
+} from '../lib/basemap'
 
 // MapLibre v6 + Vite: worker URL must be set once or GeoJSON sources never tile/paint.
 setWorkerUrl(workerUrl)
 
-const STYLE: StyleSpecification = {
-  version: 8,
-  sources: {
-    osm: {
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: '© OpenStreetMap',
-      maxzoom: 19,
-    },
-  },
-  layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
-}
+const TEAL = '#C5E1E5'
+const TEAL_MUTED = 'rgba(197, 225, 229, 0.4)'
+const ALT = '#5a6e72'
+const CASING = '#061417'
+/** Clear corridor heat without the neon blowout. */
+const HEAT_OPACITY = 0.86
 
-const TEAL = '#5fdede'
-const TEAL_MUTED = 'rgba(95, 222, 222, 0.45)'
-const ALT = '#9aa3ad'
-const CASING = '#0d1116'
-
-function fmtEta(iso: string) {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-    })
-  } catch {
-    return iso
-  }
-}
-
-function popupHtml(c: Checkpoint, routeId: string) {
+function popupHtml(c: Checkpoint, routeName: string) {
   const badge = c.load_escalated
-    ? `<span class="pop-badge">Load escalated</span>`
+    ? `<span class="pop-badge">Heavier load raised this risk</span>`
     : ''
   return `
     <div class="map-pop">
-      <strong>${routeId} · mi ${c.mile}</strong>
-      <div class="pop-risk" style="color:${RISK_COLORS[c.risk]}">${c.risk}</div>
+      <strong>${routeName} · mile ${Math.round(c.mile)}</strong>
+      <div class="pop-risk" style="color:${RISK_COLORS[c.risk]}">Risk: ${c.risk}</div>
       ${badge}
       <dl>
-        <dt>ETA</dt><dd>${fmtEta(c.eta)}</dd>
-        <dt>Forecast hr</dt><dd>${c.forecast_time}Z</dd>
-        <dt>Wind</dt><dd>${Number(c.wind_mph).toFixed(1)} mph (${c.wind_risk ?? '—'})</dd>
-        <dt>Rain</dt><dd>${Number(c.rain_in_hr).toFixed(2)} in/hr (${c.rain_risk ?? '—'})</dd>
-        <dt>Snow</dt><dd>${Number(c.snow_in_hr).toFixed(2)} in/hr (${c.snow_risk ?? '—'})</dd>
+        <dt>Arrive</dt><dd>${formatLocalDateTime(c.eta)}</dd>
+        <dt>Wind</dt><dd>${Number(c.wind_mph).toFixed(0)} mph · ${c.wind_risk ?? '—'}</dd>
+        <dt>Rain</dt><dd>${Number(c.rain_in_hr).toFixed(2)} in/hr · ${c.rain_risk ?? '—'}</dd>
+        <dt>Snow</dt><dd>${Number(c.snow_in_hr).toFixed(2)} in/hr · ${c.snow_risk ?? '—'}</dd>
       </dl>
     </div>`
+}
+
+function rankById(data: PlanResponse): Map<string, number> {
+  const m = new Map<string, number>()
+  data.routes.forEach((r, i) => m.set(r.id, i))
+  return m
 }
 
 function routesCollection(data: PlanResponse, sel: string | null) {
@@ -77,7 +69,6 @@ function routesCollection(data: PlanResponse, sel: string | null) {
       type: 'Feature' as const,
       properties: {
         id: r.id,
-        best: r.id === data.recommended ? 1 : 0,
         selected: r.id === selected ? 1 : 0,
       },
       geometry: { type: 'LineString' as const, coordinates: r.geometry },
@@ -85,15 +76,34 @@ function routesCollection(data: PlanResponse, sel: string | null) {
   }
 }
 
+/** Keep endpoints, load-escalated, High+, and a thinned sample — fewer, larger stops. */
+function thinCheckpoints(cps: Checkpoint[]): Checkpoint[] {
+  if (cps.length <= 8) return cps
+  const out: Checkpoint[] = []
+  const step = Math.max(2, Math.ceil(cps.length / 10))
+  cps.forEach((c, i) => {
+    const keep =
+      i === 0 ||
+      i === cps.length - 1 ||
+      c.load_escalated ||
+      c.risk_level >= 2 ||
+      i % step === 0
+    if (keep) out.push(c)
+  })
+  return out
+}
+
 function cpsCollection(data: PlanResponse, sel: string | null) {
   const selected = sel ?? data.recommended
+  const ranks = rankById(data)
   return {
     type: 'FeatureCollection' as const,
     features: data.routes.flatMap(r =>
-      r.checkpoints.map(c => ({
+      thinCheckpoints(r.checkpoints).map(c => ({
         type: 'Feature' as const,
         properties: {
           routeId: r.id,
+          rank: ranks.get(r.id) ?? 0,
           color: RISK_COLORS[c.risk],
           selected: r.id === selected ? 1 : 0,
           payload: JSON.stringify(c),
@@ -123,25 +133,86 @@ function heatCollection(data: PlanResponse) {
   }
 }
 
+function endsCollection(data: PlanResponse) {
+  const r = data.routes[0]
+  if (!r?.geometry?.length) {
+    return { type: 'FeatureCollection' as const, features: [] }
+  }
+  const start = r.geometry[0]
+  const end = r.geometry[r.geometry.length - 1]
+  return {
+    type: 'FeatureCollection' as const,
+    features: [
+      {
+        type: 'Feature' as const,
+        properties: { kind: 'start', label: 'Start' },
+        geometry: { type: 'Point' as const, coordinates: start },
+      },
+      {
+        type: 'Feature' as const,
+        properties: { kind: 'end', label: 'End' },
+        geometry: { type: 'Point' as const, coordinates: end },
+      },
+    ],
+  }
+}
+
+function truckCollection(
+  route: RouteResult | null,
+  departureIso: string | null,
+  forecastIso: string | null,
+) {
+  if (!route?.geometry?.length || !departureIso || !forecastIso) {
+    return { type: 'FeatureCollection' as const, features: [] }
+  }
+  const pt = truckPositionAt(route, departureIso, parseUTC(forecastIso).getTime())
+  if (!pt) return { type: 'FeatureCollection' as const, features: [] }
+  return {
+    type: 'FeatureCollection' as const,
+    features: [{
+      type: 'Feature' as const,
+      properties: {},
+      geometry: { type: 'Point' as const, coordinates: pt },
+    }],
+  }
+}
+
+function emptyFC() {
+  return { type: 'FeatureCollection' as const, features: [] as never[] }
+}
+
+function reduceMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 type Props = {
   data: PlanResponse | null
   selectedId: string | null
   hour: number
   showHeatmap: boolean
+  departureIso?: string | null
+  dimmed?: boolean
+  recenterToken?: number
   onSelectRoute?: (id: string) => void
 }
 
-export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelectRoute }: Props) {
+export default function RouteMap({
+  data, selectedId, hour, showHeatmap,
+  departureIso = null, dimmed = false, recenterToken = 0, onSelectRoute,
+}: Props) {
   const el = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibreMapType | null>(null)
   const popup = useRef<Popup | null>(null)
   const ready = useRef(false)
   const onSelectRef = useRef(onSelectRoute)
   const rafRef = useRef(0)
+  const heatRafRef = useRef(0)
   const dataRef = useRef(data)
   const selectedRef = useRef(selectedId)
   const hourRef = useRef(hour)
   const heatRef = useRef(showHeatmap)
+  const depRef = useRef(departureIso)
+  const dimRef = useRef(dimmed)
   const drawnPlanRef = useRef<PlanResponse | null>(null)
 
   onSelectRef.current = onSelectRoute
@@ -149,32 +220,60 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
   selectedRef.current = selectedId
   hourRef.current = hour
   heatRef.current = showHeatmap
+  depRef.current = departureIso
+  dimRef.current = dimmed
 
   useEffect(() => {
     if (!el.current || map.current) return
+    const container = el.current
     const m = new MapLibreMap({
-      container: el.current,
-      style: STYLE,
+      container,
+      style: basemapStyleUrl(),
       center: [-98, 39],
       zoom: 3.6,
       attributionControl: { compact: true },
+      fadeDuration: 320,
+      maxPitch: 0,
+      pitchWithRotate: false,
+      dragRotate: false,
+      touchPitch: false,
+      pixelRatio: Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2),
     })
-    m.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+    m.addControl(new NavigationControl({
+      showCompass: false,
+      visualizePitch: false,
+    }), 'top-right')
     popup.current = new Popup({
-      closeButton: true, maxWidth: '260px', offset: 12,
+      closeButton: true, maxWidth: '280px', offset: 16,
+      className: 'spotter-popup',
     })
 
     const markReady = () => {
+      applySpotterBasemapTheme(m)
       ready.current = true
-      // Expose for Playwright verification (dev only)
       ;(window as unknown as { __spotterMap?: MapLibreMapType }).__spotterMap = m
+      // Layout may settle after Tailwind paint — force a real size then draw
+      m.resize()
       syncAll()
     }
     m.on('load', markReady)
+    m.on('style.load', () => {
+      applySpotterBasemapTheme(m)
+      if (ready.current) syncAll()
+    })
     map.current = m
 
+    // Tailwind grid height can arrive after mount; keep MapLibre in sync
+    const ro = new ResizeObserver(() => {
+      if (map.current === m) m.resize()
+    })
+    ro.observe(container)
+    requestAnimationFrame(() => m.resize())
+
     return () => {
+      ro.disconnect()
       cancelAnimationFrame(rafRef.current)
+      cancelAnimationFrame(heatRafRef.current)
       popup.current?.remove()
       m.remove()
       map.current = null
@@ -188,13 +287,19 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
 
   function ensureLayers(m: MapLibreMapType) {
     if (!m.getSource('heat')) {
-      m.addSource('heat', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      m.addSource('heat', { type: 'geojson', data: emptyFC() })
     }
     if (!m.getSource('routes')) {
-      m.addSource('routes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      m.addSource('routes', { type: 'geojson', data: emptyFC() })
     }
     if (!m.getSource('cps')) {
-      m.addSource('cps', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      m.addSource('cps', { type: 'geojson', data: emptyFC() })
+    }
+    if (!m.getSource('ends')) {
+      m.addSource('ends', { type: 'geojson', data: emptyFC() })
+    }
+    if (!m.getSource('truck')) {
+      m.addSource('truck', { type: 'geojson', data: emptyFC() })
     }
 
     if (!m.getLayer('heat-layer')) {
@@ -205,21 +310,30 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
         layout: { visibility: 'none' },
         paint: {
           'heatmap-weight': ['coalesce', ['get', 'w0'], 0],
-          'heatmap-intensity': 1.85,
+          'heatmap-intensity': [
+            'interpolate', ['linear'], ['zoom'],
+            3, 1.25,
+            6, 1.45,
+            9, 1.65,
+            12, 1.8,
+          ],
           'heatmap-radius': [
             'interpolate', ['linear'], ['zoom'],
-            4, 22,
-            7, 36,
-            10, 48,
+            3, 28,
+            5, 38,
+            7, 48,
+            9, 58,
+            11, 68,
           ],
-          'heatmap-opacity': 0.78,
+          'heatmap-opacity': HEAT_OPACITY,
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
             0, 'rgba(13,17,22,0)',
-            0.15, 'rgba(45,164,78,0.55)',
-            0.35, 'rgba(212,167,44,0.72)',
-            0.55, 'rgba(251,133,0,0.85)',
-            0.75, 'rgba(207,34,46,0.95)',
+            0.08, 'rgba(45,164,78,0.5)',
+            0.22, 'rgba(45,164,78,0.72)',
+            0.4, 'rgba(212,167,44,0.8)',
+            0.6, 'rgba(251,133,0,0.88)',
+            0.8, 'rgba(207,34,46,0.94)',
             1, 'rgba(110,64,201,1)',
           ],
         },
@@ -234,13 +348,8 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
           'line-color': CASING,
-          'line-width': [
-            'case',
-            ['==', ['get', 'selected'], 1], 10,
-            ['==', ['get', 'best'], 1], 8,
-            6,
-          ],
-          'line-opacity': 0.85,
+          'line-width': 6,
+          'line-opacity': 0.9,
         },
       })
     }
@@ -252,27 +361,34 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
         source: 'routes',
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-          'line-color': [
-            'case',
-            ['==', ['get', 'selected'], 1], TEAL,
-            ['==', ['get', 'best'], 1], TEAL,
-            ALT,
-          ],
-          'line-width': [
-            'case',
-            ['==', ['get', 'selected'], 1], 6,
-            ['==', ['get', 'best'], 1], 5,
-            3,
-          ],
-          'line-opacity': [
-            'case',
-            ['==', ['get', 'selected'], 1], 1,
-            ['==', ['get', 'best'], 1], 0.92,
-            0.55,
-          ],
+          'line-color': ALT,
+          'line-width': 2.5,
+          'line-opacity': 0.42,
         },
       })
     }
+
+    const dimFactor = dimRef.current ? 0.35 : 1
+    m.setPaintProperty('routes-casing', 'line-width', [
+      'case',
+      ['==', ['get', 'selected'], 1], 11,
+      6,
+    ])
+    m.setPaintProperty('routes', 'line-color', [
+      'case',
+      ['==', ['get', 'selected'], 1], TEAL,
+      ALT,
+    ])
+    m.setPaintProperty('routes', 'line-width', [
+      'case',
+      ['==', ['get', 'selected'], 1], 6.5,
+      2.5,
+    ])
+    m.setPaintProperty('routes', 'line-opacity', [
+      'case',
+      ['==', ['get', 'selected'], 1], 1 * dimFactor,
+      0.42 * dimFactor,
+    ])
 
     if (!m.getLayer('routes-hit')) {
       m.addLayer({
@@ -282,8 +398,27 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
           'line-color': TEAL_MUTED,
-          'line-width': 16,
+          'line-width': 22,
           'line-opacity': 0,
+        },
+      })
+    }
+
+    // Invisible fat hit targets for phone taps
+    if (!m.getLayer('cps-hit')) {
+      m.addLayer({
+        id: 'cps-hit',
+        type: 'circle',
+        source: 'cps',
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            4, 16,
+            8, 22,
+            12, 28,
+          ],
+          'circle-color': '#fff',
+          'circle-opacity': 0,
         },
       })
     }
@@ -296,12 +431,12 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
         paint: {
           'circle-radius': [
             'case',
-            ['==', ['get', 'selected'], 1], 7,
-            4.5,
+            ['==', ['get', 'selected'], 1], 10,
+            7,
           ],
           'circle-color': ['get', 'color'],
-          'circle-stroke-color': CASING,
-          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#fafbfa',
+          'circle-stroke-width': 2,
           'circle-opacity': [
             'case',
             ['==', ['get', 'selected'], 1], 1,
@@ -310,20 +445,130 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
         },
       })
     }
+
+    if (!m.getLayer('ends-halo')) {
+      m.addLayer({
+        id: 'ends-halo',
+        type: 'circle',
+        source: 'ends',
+        paint: {
+          'circle-radius': 22,
+          'circle-color': [
+            'match', ['get', 'kind'],
+            'start', 'rgba(26,154,163,0.45)',
+            'rgba(244,248,248,0.35)',
+          ],
+          'circle-stroke-width': 0,
+        },
+      })
+    } else {
+      m.setPaintProperty('ends-halo', 'circle-radius', 22)
+    }
+
+    if (!m.getLayer('ends')) {
+      m.addLayer({
+        id: 'ends',
+        type: 'circle',
+        source: 'ends',
+        paint: {
+          'circle-radius': 12,
+          'circle-color': [
+            'match', ['get', 'kind'],
+            'start', '#1A9AA3',
+            '#F4F8F8',
+          ],
+          'circle-stroke-color': '#061417',
+          'circle-stroke-width': 3,
+          'circle-stroke-opacity': 1,
+        },
+      })
+    } else {
+      m.setPaintProperty('ends', 'circle-radius', 12)
+      m.setPaintProperty('ends', 'circle-stroke-width', 3)
+      m.setPaintProperty('ends', 'circle-color', [
+        'match', ['get', 'kind'],
+        'start', '#1A9AA3',
+        '#F4F8F8',
+      ])
+    }
+
+    if (!m.getLayer('ends-label')) {
+      m.addLayer({
+        id: 'ends-label',
+        type: 'symbol',
+        source: 'ends',
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-font': pickLabelFont(m),
+          'text-size': 14,
+          'text-offset': [0, 1.85],
+          'text-anchor': 'top',
+          'text-letter-spacing': 0.02,
+          'text-max-width': 8,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+          'symbol-sort-key': 10,
+        },
+        paint: {
+          'text-color': '#FFFFFF',
+          'text-halo-color': 'rgba(6,20,23,0.95)',
+          'text-halo-width': 2.4,
+          'text-halo-blur': 0.4,
+          'text-opacity': 1,
+        },
+      })
+    } else {
+      m.setLayoutProperty('ends-label', 'text-size', 14)
+      m.setLayoutProperty('ends-label', 'text-allow-overlap', true)
+      m.setLayoutProperty('ends-label', 'text-ignore-placement', true)
+      m.setPaintProperty('ends-label', 'text-color', '#FFFFFF')
+      m.setPaintProperty('ends-label', 'text-halo-color', 'rgba(6,20,23,0.95)')
+      m.setPaintProperty('ends-label', 'text-halo-width', 2.4)
+      m.setPaintProperty('ends-label', 'text-halo-blur', 0.4)
+    }
+
+    if (!m.getLayer('truck-halo')) {
+      m.addLayer({
+        id: 'truck-halo',
+        type: 'circle',
+        source: 'truck',
+        paint: {
+          'circle-radius': 18,
+          'circle-color': 'rgba(197, 225, 229, 0.28)',
+          'circle-stroke-width': 0,
+        },
+      })
+    }
+
+    if (!m.getLayer('truck')) {
+      m.addLayer({
+        id: 'truck',
+        type: 'circle',
+        source: 'truck',
+        paint: {
+          'circle-radius': 9,
+          'circle-color': '#C5E1E5',
+          'circle-stroke-color': '#0D7C82',
+          'circle-stroke-width': 3,
+        },
+      })
+    }
   }
 
   function bindInteractions(m: MapLibreMapType) {
+    m.off('click', 'cps-hit', onCpClick)
     m.off('click', 'cps', onCpClick)
     m.off('click', 'routes-hit', onRouteClick)
-    m.off('mouseenter', 'cps', onCpEnter)
-    m.off('mouseleave', 'cps', onCpLeave)
+    m.off('mouseenter', 'cps-hit', onCpEnter)
+    m.off('mouseleave', 'cps-hit', onCpLeave)
     m.off('mouseenter', 'routes-hit', onRouteEnter)
     m.off('mouseleave', 'routes-hit', onRouteLeave)
 
+    m.on('click', 'cps-hit', onCpClick)
     m.on('click', 'cps', onCpClick)
     m.on('click', 'routes-hit', onRouteClick)
-    m.on('mouseenter', 'cps', onCpEnter)
-    m.on('mouseleave', 'cps', onCpLeave)
+    m.on('mouseenter', 'cps-hit', onCpEnter)
+    m.on('mouseleave', 'cps-hit', onCpLeave)
     m.on('mouseenter', 'routes-hit', onRouteEnter)
     m.on('mouseleave', 'routes-hit', onRouteLeave)
   }
@@ -333,8 +578,12 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
     if (!f || !popup.current || !map.current) return
     const c = JSON.parse(String(f.properties?.payload)) as Checkpoint
     const routeId = String(f.properties?.routeId ?? '')
+    const rank = Number(f.properties?.rank ?? 0)
     if (routeId) onSelectRef.current?.(routeId)
-    popup.current.setLngLat(e.lngLat).setHTML(popupHtml(c, routeId)).addTo(map.current)
+    popup.current
+      .setLngLat(e.lngLat)
+      .setHTML(popupHtml(c, routeRankLabel(rank)))
+      .addTo(map.current)
   }
 
   function onRouteClick(e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) {
@@ -363,18 +612,15 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
     cancelAnimationFrame(rafRef.current)
     const full = routesCollection(d, selectedRef.current)
     const src = m.getSource('routes') as GeoJSONSource
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    if (reduce) {
+    if (reduceMotion()) {
       src.setData(full)
       return
     }
     const start = performance.now()
     const dur = 780
-    // Strong ease-out — starts fast, settles cleanly (animations.dev)
     const easeOut = (t: number) => 1 - Math.pow(1 - t, 3.2)
 
     const tick = (now: number) => {
-      // Abort if a newer plan replaced this one mid-animation
       if (drawnPlanRef.current !== d || map.current !== m) return
       const t = Math.min(1, (now - start) / dur)
       const p = easeOut(t)
@@ -395,6 +641,23 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
     rafRef.current = requestAnimationFrame(tick)
   }
 
+  function fitTrip(m: MapLibreMapType, d: PlanResponse, duration = 1100) {
+    const b = new LngLatBounds()
+    d.routes.forEach(r => r.geometry.forEach(p => b.extend(p as [number, number])))
+    if (!b.isEmpty()) {
+      const mobile = window.matchMedia('(max-width: 860px)').matches
+      m.fitBounds(b, {
+        padding: mobile
+          ? { top: 72, bottom: 200, left: 36, right: 36 }
+          : { top: 96, bottom: 120, left: 56, right: 56 },
+        maxZoom: 8.2,
+        duration: reduceMotion() ? 0 : duration,
+        essential: true,
+        easing: (t) => 1 - Math.pow(1 - t, 3.4),
+      })
+    }
+  }
+
   function applyHeatPaint(m: MapLibreMapType) {
     if (!m.getLayer('heat-layer')) return
     const h = hourRef.current
@@ -406,6 +669,58 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
     )
   }
 
+  function crossfadeHeatHour(m: MapLibreMapType, nextHour: number) {
+    cancelAnimationFrame(heatRafRef.current)
+    if (!m.getLayer('heat-layer')) return
+
+    if (reduceMotion()) {
+      m.setPaintProperty('heat-layer', 'heatmap-weight', ['coalesce', ['get', `w${nextHour}`], 0])
+      m.setPaintProperty('heat-layer', 'heatmap-opacity', HEAT_OPACITY)
+      return
+    }
+
+    const start = performance.now()
+    const fade = 140
+    const total = 320
+    let swapped = false
+
+    const tick = (now: number) => {
+      if (map.current !== m || !m.getLayer('heat-layer')) return
+      const t = now - start
+      if (t < fade) {
+        const u = t / fade
+        m.setPaintProperty('heat-layer', 'heatmap-opacity', HEAT_OPACITY * (1 - u) + 0.18 * u)
+        heatRafRef.current = requestAnimationFrame(tick)
+        return
+      }
+      if (!swapped) {
+        swapped = true
+        m.setPaintProperty('heat-layer', 'heatmap-weight', ['coalesce', ['get', `w${nextHour}`], 0])
+      }
+      if (t < total) {
+        const u = (t - fade) / (total - fade)
+        m.setPaintProperty('heat-layer', 'heatmap-opacity', 0.18 * (1 - u) + HEAT_OPACITY * u)
+        heatRafRef.current = requestAnimationFrame(tick)
+        return
+      }
+      m.setPaintProperty('heat-layer', 'heatmap-opacity', HEAT_OPACITY)
+    }
+    heatRafRef.current = requestAnimationFrame(tick)
+  }
+
+  function syncTruck(m: MapLibreMapType) {
+    if (!m.getSource('truck')) return
+    const d = dataRef.current
+    const selId = selectedRef.current
+    const route = d
+      ? (d.routes.find(r => r.id === selId) ?? d.routes.find(r => r.id === d.recommended) ?? null)
+      : null
+    const forecastIso = d?.heatmap?.times?.[hourRef.current] ?? null
+    ;(m.getSource('truck') as GeoJSONSource).setData(
+      truckCollection(route, depRef.current, forecastIso),
+    )
+  }
+
   function syncSelection(m: MapLibreMapType) {
     const d = dataRef.current
     if (!d || !m.getSource('routes')) return
@@ -414,35 +729,47 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
     if (m.getSource('cps')) {
       ;(m.getSource('cps') as GeoJSONSource).setData(cpsCollection(d, sel))
     }
+    syncTruck(m)
+  }
+
+  function clearPlan(m: MapLibreMapType) {
+    drawnPlanRef.current = null
+    popup.current?.remove()
+    for (const id of ['routes', 'cps', 'heat', 'ends', 'truck'] as const) {
+      const src = m.getSource(id) as GeoJSONSource | undefined
+      src?.setData(emptyFC())
+    }
+    if (m.getLayer('heat-layer')) {
+      m.setLayoutProperty('heat-layer', 'visibility', 'none')
+    }
   }
 
   function syncAll() {
     const m = map.current
     const d = dataRef.current
     if (!m || !ready.current || !m.isStyleLoaded()) return
-    if (!d) {
-      drawnPlanRef.current = null
-      return
-    }
 
     try {
       ensureLayers(m)
       bindInteractions(m)
+
+      if (!d) {
+        clearPlan(m)
+        return
+      }
 
       const isNewPlan = drawnPlanRef.current !== d
       ;(m.getSource('cps') as GeoJSONSource).setData(
         cpsCollection(d, selectedRef.current),
       )
       ;(m.getSource('heat') as GeoJSONSource).setData(heatCollection(d))
+      ;(m.getSource('ends') as GeoJSONSource).setData(endsCollection(d))
       applyHeatPaint(m)
+      syncTruck(m)
 
       if (isNewPlan) {
         drawnPlanRef.current = d
-        const b = new LngLatBounds()
-        d.routes.forEach(r => r.geometry.forEach(p => b.extend(p as [number, number])))
-        if (!b.isEmpty()) {
-          m.fitBounds(b, { padding: 64, maxZoom: 8, duration: 900, essential: true })
-        }
+        fitTrip(m, d)
         animateDrawIn(m, d)
       } else {
         ;(m.getSource('routes') as GeoJSONSource).setData(
@@ -454,16 +781,14 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
     }
   }
 
-  // Plan data changed
   useEffect(() => {
     const m = map.current
-    if (!m || !data) return
+    if (!m) return
     if (ready.current && m.isStyleLoaded()) syncAll()
     else m.once('load', () => { ready.current = true; syncAll() })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
 
-  // Selection highlight — setData only
   useEffect(() => {
     const m = map.current
     if (!m || !data || !ready.current || !m.getSource('routes')) return
@@ -471,12 +796,20 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, data])
 
-  // Hour slider: paint-only
   useEffect(() => {
     const m = map.current
     if (!m || !m.getLayer('heat-layer')) return
-    m.setPaintProperty('heat-layer', 'heatmap-weight', ['coalesce', ['get', `w${hour}`], 0])
+    crossfadeHeatHour(m, hour)
+    syncTruck(m)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hour])
+
+  useEffect(() => {
+    const m = map.current
+    if (!m || !ready.current) return
+    syncTruck(m)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [departureIso, selectedId])
 
   useEffect(() => {
     const m = map.current
@@ -488,5 +821,45 @@ export default function RouteMap({ data, selectedId, hour, showHeatmap, onSelect
     )
   }, [showHeatmap, data])
 
-  return <div id="map" ref={el} role="presentation" />
+  useEffect(() => {
+    const m = map.current
+    if (!m || !ready.current || !m.getLayer('routes')) return
+    const dimFactor = dimmed ? 0.35 : 1
+    m.setPaintProperty('routes', 'line-opacity', [
+      'case',
+      ['==', ['get', 'selected'], 1], 1 * dimFactor,
+      0.42 * dimFactor,
+    ])
+    if (m.getLayer('cps')) {
+      m.setPaintProperty('cps', 'circle-opacity', [
+        'case',
+        ['==', ['get', 'selected'], 1], 1 * dimFactor,
+        0.4 * dimFactor,
+      ])
+    }
+    if (m.getLayer('heat-layer')) {
+      m.setPaintProperty('heat-layer', 'heatmap-opacity', HEAT_OPACITY * (dimmed ? 0.35 : 1))
+    }
+  }, [dimmed])
+
+  useEffect(() => {
+    if (!recenterToken) return
+    const m = map.current
+    const d = dataRef.current
+    if (!m || !d || !ready.current) return
+    fitTrip(m, d, 700)
+  }, [recenterToken])
+
+  return (
+    <div
+      id="map"
+      ref={el}
+      role="presentation"
+      className={
+        dimmed
+          ? 'absolute inset-0 h-full w-full min-h-0 saturate-75 brightness-[0.92]'
+          : 'absolute inset-0 h-full w-full min-h-0'
+      }
+    />
+  )
 }
