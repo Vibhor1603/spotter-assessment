@@ -15,6 +15,13 @@ type Props = {
   snap: SheetSnap
   onSnapChange: (snap: SheetSnap) => void
   children: ReactNode
+  /** Always-visible foot of the sheet (e.g. primary CTA) — sits below the scroll area. */
+  footer?: ReactNode
+  /**
+   * Size the sheet to its content (no empty stretch above the footer).
+   * Used for the planning form before routes exist.
+   */
+  fitContent?: boolean
   /** Called whenever the visible sheet height (px) changes — for map overlays. */
   onHeightChange?: (heightPx: number) => void
   className?: string
@@ -43,7 +50,7 @@ function snapHeights(vh: number, peekBody = 0): Record<SheetSnap, number> {
   const sb = safeBottom()
   // Handle (~44) + measured peek body (trip + swipe cards), hard-capped so map stays visible
   const peekRaw = Math.round(44 + sb + Math.max(peekBody, 96))
-  const half = Math.round(vh * 0.48)
+  const half = Math.round(vh * 0.55)
   const full = Math.round(Math.min(vh * 0.92, vh - 8))
   const peek = Math.min(peekRaw, Math.round(vh * 0.34), half - 48)
   return {
@@ -83,16 +90,21 @@ function nearestSnap(height: number, heights: Record<SheetSnap, number>, velocit
  * Desktop callers should not mount this — keep sidebar layout untouched.
  */
 export default function BottomSheet({
-  snap, onSnapChange, children, onHeightChange, className,
+  snap, onSnapChange, children, footer, fitContent = false, onHeightChange, className,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [vh, setVh] = useState(() => typeof window !== 'undefined' ? window.innerHeight : 800)
   const [peekBody, setPeekBody] = useState(0)
+  const [fitH, setFitH] = useState(0)
   const heights = snapHeights(vh, peekBody)
   const maxH = heights.full
 
-  const heightRef = useRef(heights[snap])
-  const [height, setHeight] = useState(heights[snap])
+  const restingH = fitContent && fitH > 0
+    ? Math.min(maxH, Math.max(fitH, 240))
+    : heights[snap]
+
+  const heightRef = useRef(restingH)
+  const [height, setHeight] = useState(restingH)
   const [dragging, setDragging] = useState(false)
   const drag = useRef<{
     startY: number
@@ -105,13 +117,12 @@ export default function BottomSheet({
   } | null>(null)
   const DRAG_THRESHOLD = 8
 
-  // Keep height in sync when snap or viewport changes (not mid-drag)
+  // Keep height in sync when snap / fit / viewport changes (not mid-drag)
   useLayoutEffect(() => {
     if (dragging) return
-    const next = heights[snap]
-    heightRef.current = next
-    setHeight(next)
-  }, [snap, vh, peekBody, dragging]) // heights derived
+    heightRef.current = restingH
+    setHeight(restingH)
+  }, [restingH, dragging])
 
   useEffect(() => {
     onHeightChange?.(height)
@@ -145,12 +156,47 @@ export default function BottomSheet({
     return () => ro.disconnect()
   }, [children])
 
+  // Measure natural content height for fit-to-content planning mode
+  useLayoutEffect(() => {
+    if (!fitContent) {
+      setFitH(0)
+      return
+    }
+    const root = rootRef.current
+    if (!root) return
+    const measure = () => {
+      const handle = root.querySelector('[data-sheet-handle]') as HTMLElement | null
+      const scroll = root.querySelector('[data-sheet-scroll]') as HTMLElement | null
+      const foot = root.querySelector('[data-sheet-footer]') as HTMLElement | null
+      const sb = safeBottom()
+      const next = (handle?.offsetHeight ?? 44)
+        + (scroll?.scrollHeight ?? 0)
+        + (foot?.offsetHeight ?? 0)
+        + sb
+        + 2
+      setFitH(next)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    const scroll = root.querySelector('[data-sheet-scroll]')
+    const foot = root.querySelector('[data-sheet-footer]')
+    if (scroll) ro.observe(scroll)
+    if (foot) ro.observe(foot)
+    return () => ro.disconnect()
+  }, [fitContent, children, footer])
+
   const commitSnap = useCallback((next: SheetSnap) => {
     onSnapChange(next)
+    if (fitContent && next === 'half' && fitH > 0) {
+      const h = Math.min(maxH, Math.max(fitH, 240))
+      heightRef.current = h
+      setHeight(h)
+      return
+    }
     const h = snapHeights(window.innerHeight, peekBody)[next]
     heightRef.current = h
     setHeight(h)
-  }, [onSnapChange, peekBody])
+  }, [onSnapChange, peekBody, fitContent, fitH, maxH])
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (e.button !== 0) return
@@ -212,6 +258,15 @@ export default function BottomSheet({
     }
     const v = d.velocity
     setDragging(false)
+    if (fitContent && fitH > 0) {
+      // Planning mode: settle back to content height unless flicked toward full
+      if (v < -VELOCITY_FLICK || heightRef.current > (fitH + maxH) / 2) {
+        commitSnap('full')
+      } else {
+        commitSnap('half') // half + fitContent → content height
+      }
+      return
+    }
     const next = nearestSnap(heightRef.current, heights, v)
     commitSnap(next)
   }
@@ -262,6 +317,10 @@ export default function BottomSheet({
             e.stopPropagation()
           }}
           onClick={() => {
+            if (fitContent) {
+              commitSnap(snap === 'full' ? 'half' : 'full')
+              return
+            }
             const cycle: SheetSnap[] = ['peek', 'half', 'full']
             const i = cycle.indexOf(snap)
             commitSnap(cycle[(i + 1) % cycle.length])
@@ -273,11 +332,27 @@ export default function BottomSheet({
 
       <div
         data-sheet-scroll
-        className="flex min-h-0 flex-1 touch-pan-y flex-col gap-3 overflow-y-auto overscroll-contain px-5 pb-4 pt-0"
+        className={cn(
+          'flex touch-pan-y flex-col gap-3 overscroll-contain px-5 pt-0',
+          // fitContent: hug children (no flex stretch gap above footer)
+          fitContent ? 'shrink-0' : 'min-h-0 flex-1 overflow-y-auto',
+          footer ? 'pb-2' : 'pb-4',
+        )}
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
         {children}
       </div>
+
+      {footer && (
+        <div
+          data-sheet-footer
+          data-sheet-chrome
+          data-no-drag
+          className="shrink-0 border-t border-line/80 bg-ink-soft/95 px-5 pb-3 pt-2.5 backdrop-blur-md"
+        >
+          {footer}
+        </div>
+      )}
     </div>
   )
 }

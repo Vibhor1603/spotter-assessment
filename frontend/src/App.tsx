@@ -29,12 +29,6 @@ const LOAD_PRESETS = [
   { lb: 80000, label: '80k' },
 ] as const
 
-const EXAMPLE_TRIPS: { from: string; to: string; load: number; label: string }[] = [
-  { from: 'Denver, CO', to: 'Salt Lake City, UT', load: 35000, label: 'Denver → Salt Lake' },
-  { from: 'Chicago, IL', to: 'Indianapolis, IN', load: 45000, label: 'Chicago → Indy' },
-  { from: 'Kansas City, MO', to: 'Omaha, NE', load: 20000, label: 'KC → Omaha' },
-]
-
 const fieldLabel = 'mb-1 block text-[11px] font-semibold uppercase tracking-[0.04em] text-muted'
 const fieldInput = 'w-full min-h-9 rounded-[10px] border border-line bg-surface px-3 py-1.5 font-sans text-sm font-medium tracking-tight text-mist tabular-nums transition-[border-color,background,box-shadow] duration-160 ease-out-strong focus:border-mint/40 focus:bg-surface-2 focus:outline-none focus:shadow-[0_0_0_3px_rgba(13,124,130,0.22)]'
 
@@ -108,6 +102,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
+  // Planning uses fit-to-content; after results, peek / half / full apply
   const [sheetSnap, setSheetSnap] = useState<SheetSnap>('half')
   const [sheetHeight, setSheetHeight] = useState(0)
   const [formOpen, setFormOpen] = useState(true)
@@ -203,6 +198,7 @@ export default function App() {
       setSelectedId(null)
       setStale(false)
       setFormOpen(true)
+      // fitContent kicks in again when data is cleared
       setSheetSnap('half')
       setErr(x instanceof Error ? x.message : 'Something went wrong. Try again.')
     } finally {
@@ -217,16 +213,6 @@ export default function App() {
     setOrigin(dest)
     setDest(origin)
     markInputsDirty()
-  }
-
-  function applyExample(ex: typeof EXAMPLE_TRIPS[number]) {
-    setOriginText(ex.from)
-    setDestText(ex.to)
-    setOrigin(null)
-    setDest(null)
-    setLoad(ex.load)
-    markInputsDirty()
-    if (isMobile) setSheetSnap('half')
   }
 
   const scrubberBottom = isMobile
@@ -379,7 +365,7 @@ export default function App() {
             )}
             aria-hidden={!formOpen}
           >
-            <form className="flex flex-col gap-3" onSubmit={submit} data-no-drag>
+            <form id="trip-plan-form" className="flex flex-col gap-3" onSubmit={submit} data-no-drag>
               <div className="relative flex flex-col overflow-visible rounded-2xl border border-line bg-surface shadow-[inset_0_1px_0_rgba(197,225,229,0.06),0_1px_2px_rgba(0,0,0,0.2)]">
                 <PlaceInput
                   label="From"
@@ -470,16 +456,19 @@ export default function App() {
                 </div>
               </div>
 
-              <button
-                className="mt-0.5 min-h-10 w-full cursor-pointer rounded-xl border-0 bg-[linear-gradient(180deg,var(--color-mint-soft)_0%,var(--color-mint)_100%)] px-4 py-2.5 font-sans text-sm font-semibold tracking-tight text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_1px_0_rgba(0,0,0,0.12),0_10px_28px_rgba(197,225,229,0.12)] transition-[transform,filter,box-shadow] duration-150 ease-out-strong hover:brightness-[1.03] active:scale-[0.97] disabled:cursor-wait disabled:opacity-55 disabled:hover:brightness-100"
-                disabled={busy}
-                type="submit"
-                tabIndex={formOpen ? 0 : -1}
-              >
-                <span className={busy ? 'inline-block animate-pulse-soft' : undefined}>
-                  {busy ? (status ?? 'Finding routes…') : data ? 'Update safest routes' : 'Find safest routes'}
-                </span>
-              </button>
+              {/* Desktop CTA — mobile uses BottomSheet footer so it never scrolls away */}
+              {!isMobile && (
+                <button
+                  className="mt-0.5 min-h-11 w-full cursor-pointer rounded-xl border-0 bg-[linear-gradient(180deg,var(--color-mint-soft)_0%,var(--color-mint)_100%)] px-4 py-2.5 font-sans text-sm font-semibold tracking-tight text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_1px_0_rgba(0,0,0,0.12),0_10px_28px_rgba(197,225,229,0.12)] transition-[transform,filter,box-shadow] duration-150 ease-out-strong hover:brightness-[1.03] active:scale-[0.97] disabled:cursor-wait disabled:opacity-55 disabled:hover:brightness-100"
+                  disabled={busy}
+                  type="submit"
+                  tabIndex={formOpen ? 0 : -1}
+                >
+                  <span className={busy ? 'inline-block animate-pulse-soft' : undefined}>
+                    {busy ? (status ?? 'Finding routes…') : data ? 'Update safest routes' : 'Find safest routes'}
+                  </span>
+                </button>
+              )}
             </form>
 
             {busy && status && (
@@ -498,26 +487,6 @@ export default function App() {
                 <div className="h-[76px] animate-shimmer rounded-xl bg-[linear-gradient(90deg,var(--color-surface)_25%,var(--color-surface-2)_50%,var(--color-surface)_75%)] bg-size-[200%_100%]" />
                 <div className="h-10 w-[70%] animate-shimmer rounded-xl bg-[linear-gradient(90deg,var(--color-surface)_25%,var(--color-surface-2)_50%,var(--color-surface)_75%)] bg-size-[200%_100%]" />
               </div>
-            )}
-
-            {!data && !busy && !err && (
-              <section className="flex flex-col gap-1.5" aria-label="Example trips">
-                <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">Try an example</p>
-                <div className="flex flex-col gap-1">
-                  {EXAMPLE_TRIPS.map(ex => (
-                    <button
-                      key={ex.label}
-                      type="button"
-                      className="flex min-h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-xl border border-line bg-transparent px-3 py-2.5 text-left font-sans text-[13px] font-medium tracking-tight text-mist transition-[background,border-color,transform] duration-140 ease-out-strong hover:border-mint/28 hover:bg-teal/16 active:scale-[0.985]"
-                      onClick={() => applyExample(ex)}
-                      tabIndex={formOpen ? 0 : -1}
-                    >
-                      {ex.label}
-                      <span className="text-xs font-medium tabular-nums text-muted">{ex.load.toLocaleString()} lb</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
             )}
           </div>
         </div>
@@ -630,6 +599,21 @@ export default function App() {
           snap={sheetSnap}
           onSnapChange={setSheetSnap}
           onHeightChange={onSheetHeight}
+          fitContent={!data && formOpen}
+          footer={
+            formOpen ? (
+              <button
+                form="trip-plan-form"
+                className="min-h-11 w-full cursor-pointer rounded-xl border-0 bg-[linear-gradient(180deg,var(--color-mint-soft)_0%,var(--color-mint)_100%)] px-4 py-2.5 font-sans text-sm font-semibold tracking-tight text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_1px_0_rgba(0,0,0,0.12),0_8px_20px_rgba(197,225,229,0.1)] transition-[transform,filter,box-shadow] duration-150 ease-out-strong hover:brightness-[1.03] active:scale-[0.97] disabled:cursor-wait disabled:opacity-55 disabled:hover:brightness-100"
+                disabled={busy}
+                type="submit"
+              >
+                <span className={busy ? 'inline-block animate-pulse-soft' : undefined}>
+                  {busy ? (status ?? 'Finding routes…') : data ? 'Update safest routes' : 'Find safest routes'}
+                </span>
+              </button>
+            ) : undefined
+          }
         >
           {panel}
         </BottomSheet>
@@ -719,17 +703,13 @@ export default function App() {
           />
         )}
 
-        {!data && !busy && (
-          <div
-            className={cn(
-              'pointer-events-none absolute inset-0 z-[1] grid place-items-center p-6',
-              isMobile && 'pb-[45dvh]',
-            )}
-          >
+        {/* Desktop only — mobile already shows the form in the sheet */}
+        {!data && !busy && !isMobile && (
+          <div className="pointer-events-none absolute inset-0 z-[1] grid place-items-center p-6">
             <div className="max-w-[280px] animate-rise rounded-2xl border border-line bg-ink/90 px-6 py-5 text-center shadow-[inset_0_1px_0_rgba(197,225,229,0.08),0_12px_28px_rgba(0,0,0,0.35)] backdrop-blur-xl">
               <p className="mb-1.5 mt-0 text-base font-semibold tracking-tight text-mist leading-snug">Plan a trip</p>
               <p className="m-0 text-[13px] leading-snug text-muted">
-                Pick From and To, or tap an example, then find the safest routes.
+                Enter From and To, then find the safest routes.
               </p>
             </div>
           </div>
