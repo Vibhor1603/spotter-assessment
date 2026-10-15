@@ -148,9 +148,11 @@ class Heatmap(SimpleTestCase):
         self.assertTrue(hm["times"][0].endswith("Z"), hm["times"][0])
         self.assertGreater(len(hm["points"]), 0)
         self.assertEqual(len(hm["points"][0]["weights"]), 48)
-        # High wind -> weight closer to 1 than calm
+        # High wind -> weight closer to 1 than calm (scrubber must be able to show the delta)
         calm = build_heatmap(coords, interval_mi=50, weather=FakeWeather(wind=5), hours=48)
         self.assertGreater(hm["points"][0]["weights"][0], calm["points"][0]["weights"][0])
+        self.assertAlmostEqual(calm["points"][0]["weights"][0], 0.14, places=2)
+        self.assertGreaterEqual(hm["points"][0]["weights"][0], 0.7)
 
 
 @override_settings(ROOT_URLCONF="config.urls")

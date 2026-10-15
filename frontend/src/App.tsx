@@ -113,8 +113,7 @@ export default function App() {
 
   const hourLabel = useMemo(() => {
     const t = data?.heatmap?.times?.[hour]
-    if (!t) return hour === 0 ? 'Now' : `In ${hour} hours`
-    return formatLocalTime(t)
+    return t ? formatLocalTime(t) : ''
   }, [data, hour])
 
   const selected = useMemo(() => {

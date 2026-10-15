@@ -180,12 +180,12 @@ def plan(origin: Place, dest: Place, departure: datetime, load_lb: float, interv
     results.sort(key=lambda r: order.index(r["id"]))
     why = explain_recommendation(order, by_id)
 
-    # Corridor heatmap across ALL route alternatives (not only the winner),
-    # so the forecast ribbon covers the trip corridor the driver is comparing.
+    # Corridor heatmap per route — frontend shows the selected corridor only
+    # so overlapping alternatives don’t fuse into one thick blob.
     heatmap = {"hours": HEATMAP_HOURS, "times": [], "points": []}
     try:
         heatmap = build_heatmap_for_routes(
-            [r["geometry"] for r in results],
+            [(r["id"], r["geometry"]) for r in results],
             interval_mi=14,
             weather=weather,
         )
@@ -211,21 +211,29 @@ def _dedupe_pts(pts: list[tuple[float, float]], min_deg: float = 0.08) -> list[t
     return out
 
 
-def build_heatmap_for_routes(geometries: list, interval_mi: float = 14, weather=None,
+def build_heatmap_for_routes(routes: list, interval_mi: float = 14, weather=None,
                              hours: int = HEATMAP_HOURS) -> dict:
-    """Heatmap samples along every alternative so the corridor covers the comparison set."""
-    pts: list[tuple[float, float]] = []
-    for coords in geometries:
+    """Heatmap samples per route id so the UI can show one corridor at a time.
+
+    ``routes`` is a list of ``(route_id, coords)`` pairs.
+    """
+    tagged: list[tuple[str | None, float, float]] = []
+    per_route_cap = max(36, 100 // max(1, len(routes)))
+    for item in routes:
+        if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], str):
+            rid, coords = item
+        else:
+            rid, coords = None, item
         if not coords or len(coords) < 2:
             continue
-        # Dense centerline + mild side offsets → continuous ribbon, not stop halos
-        pts.extend(corridor_offsets(coords, interval_mi=interval_mi, offset_mi=0.0))
+        pts = corridor_offsets(coords, interval_mi=interval_mi, offset_mi=0.0)
         pts.extend(corridor_offsets(coords, interval_mi=interval_mi * 1.5, offset_mi=5.0))
-    pts = _dedupe_pts(pts, min_deg=0.04)
-    if len(pts) > 100:
-        step = max(1, len(pts) // 100)
-        pts = pts[::step][:100]
-    return build_heatmap_points(pts, weather=weather, hours=hours)
+        pts = _dedupe_pts(pts, min_deg=0.04)
+        if len(pts) > per_route_cap:
+            step = max(1, len(pts) // per_route_cap)
+            pts = pts[::step][:per_route_cap]
+        tagged.extend((rid, lon, lat) for lon, lat in pts)
+    return build_heatmap_points(tagged, weather=weather, hours=hours)
 
 
 def build_heatmap(coords: list, interval_mi: float = 14, weather=None,
@@ -243,28 +251,40 @@ def build_heatmap(coords: list, interval_mi: float = 14, weather=None,
     if len(pts) > 100:
         step = max(1, len(pts) // 100)
         pts = pts[::step][:100]
-    return build_heatmap_points(pts, weather=weather, hours=hours)
+    return build_heatmap_points([(None, lon, lat) for lon, lat in pts],
+                                weather=weather, hours=hours)
 
 
-def build_heatmap_points(pts: list[tuple[float, float]], weather=None,
+def build_heatmap_points(pts: list, weather=None,
                          hours: int = HEATMAP_HOURS) -> dict:
+    """``pts`` are ``(lon, lat)`` or ``(route_id, lon, lat)`` triples."""
     if not pts:
         return {"hours": hours, "times": [], "points": []}
+    normalized: list[tuple[str | None, float, float]] = []
+    for p in pts:
+        if len(p) == 3:
+            normalized.append((p[0], float(p[1]), float(p[2])))
+        else:
+            normalized.append((None, float(p[0]), float(p[1])))
+    lonlats = [(lon, lat) for _, lon, lat in normalized]
     weather = weather or OpenMeteoWeather()
     try:
-        wx = weather.hourly(pts, forecast_days=FORECAST_DAYS)
+        wx = weather.hourly(lonlats, forecast_days=FORECAST_DAYS)
     except Exception as e:
         raise UpstreamError(f"Heatmap weather failed: {e}") from e
 
     times: list[str] = []
     points = []
-    for (lon, lat), payload in zip(pts, wx):
+    for (rid, lon, lat), payload in zip(normalized, wx):
         t, weights = series_weights(payload, hours=hours)
         if not times:
             times = t
-        points.append({
+        row = {
             "lon": lon,
             "lat": lat,
             "weights": [round(w, 4) for w in weights],
-        })
+        }
+        if rid is not None:
+            row["route_id"] = rid
+        points.append(row)
     return {"hours": hours, "times": times, "points": points}

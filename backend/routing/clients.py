@@ -266,12 +266,18 @@ def value_at(hourly_payload: dict, when: datetime) -> dict:
     return {k: h[k][i] for k in h if k != "time"} | {"time": h["time"][i]}
 
 
+# Risk 0..4 → heatmap weight. Low stays a faint ribbon; High+ jumps hard so
+# yellow/orange/red read clearly when weather worsens along the corridor.
+_HEAT_WEIGHT_BY_RISK = (0.14, 0.40, 0.72, 0.90, 1.0)
+
+
 def series_weights(hourly_payload: dict, hours: int = HEATMAP_HOURS) -> tuple[list[str], list[float]]:
     """Return (times[:hours], risk-weight 0..1) for heatmap paint properties.
 
     Times are UTC ISO strings with a Z suffix so the frontend does not
     mis-parse them as local wall-clock. Weight floor stays >0 so the
-    corridor heatmap remains visible even in calm weather.
+    corridor heatmap remains visible even in calm weather; High+ punches
+    so scrubbing and hotspots show real color change.
     """
     from .risk import classify_wind, classify_rain, classify_snow
     h = hourly_payload["hourly"]
@@ -290,7 +296,6 @@ def series_weights(hourly_payload: dict, hours: int = HEATMAP_HOURS) -> tuple[li
         wind = h["wind_speed_10m"][i] or 0
         rain = h["rain"][i] or 0
         snow = h["snowfall"][i] or 0
-        level = max(classify_wind(wind), classify_rain(rain), classify_snow(snow))
-        # Map Risk 0..4 -> weight 0.28..1.0 (calm still a soft corridor; severe punches)
-        weights.append(0.28 + 0.18 * int(level))
+        level = int(max(classify_wind(wind), classify_rain(rain), classify_snow(snow)))
+        weights.append(_HEAT_WEIGHT_BY_RISK[min(level, 4)])
     return times, weights

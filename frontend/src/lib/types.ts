@@ -20,7 +20,7 @@ export interface RouteResult {
 export interface HeatmapPayload {
   hours: number
   times: string[]
-  points: { lon: number; lat: number; weights: number[] }[]
+  points: { lon: number; lat: number; weights: number[]; route_id?: string }[]
 }
 export interface PlanResponse {
   recommended: string | null
@@ -29,13 +29,13 @@ export interface PlanResponse {
   heatmap?: HeatmapPayload
   forecast_days?: number
 }
-/** Risk colors tuned to Spotter logo (mint / teal / coral) while staying distinct. */
+/** Risk colors — Low leans teal so it doesn’t vanish into the lime heatmap. */
 export const RISK_COLORS: Record<RiskLabel, string> = {
-  Low: '#3d9a7a',
-  Moderate: '#d4a24c',
-  High: '#e07a3a',
-  Severe: '#f07178',
-  'No Travel': '#8b6bb5',
+  Low: '#1a9a8a',
+  Moderate: '#e0b04a',
+  High: '#ef7d35',
+  Severe: '#f25d66',
+  'No Travel': '#9b74c9',
 }
 export const RISK_ORDER: RiskLabel[] = ['Low', 'Moderate', 'High', 'Severe', 'No Travel']
 

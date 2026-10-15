@@ -34,6 +34,11 @@ export default function TimelineScrubber({
   hourRef.current = hour
   maxRef.current = maxHour
 
+  const offsetLabel = hour === 0 ? 'Now' : `+${hour}h`
+  const valueText = hour === 0
+    ? `Now${timeLabel ? `, ${timeLabel}` : ''}`
+    : `${hour} hours ahead${timeLabel ? `, ${timeLabel}` : ''}`
+
   useEffect(() => () => window.clearInterval(timer.current), [])
 
   useEffect(() => {
@@ -54,17 +59,14 @@ export default function TimelineScrubber({
   }
 
   if (orientation === 'vertical') {
-    const shortLabel = hour === 0 ? 'Now' : `+${hour}h`
-    // Match MapLibre ctrl-group: 34px wide, 10px radius, ink/90 + border-line
     return (
       <div
         className={cn(
           'pointer-events-none absolute z-[2] animate-rise',
-          // Same inset as .maplibregl-ctrl-top-right; sit just under +/- group (~78px)
           'right-[max(10px,env(safe-area-inset-right,0px))]',
           'top-[max(5.5rem,calc(env(safe-area-inset-top,0px)+5.35rem))]',
         )}
-        aria-label="Forecast timeline"
+        aria-label="Forecast timeline in hours"
       >
         <div
           className={cn(
@@ -77,10 +79,10 @@ export default function TimelineScrubber({
               className="text-center text-[9px] font-semibold leading-none tracking-tight text-mist tabular-nums"
               title={timeLabel}
             >
-              {shortLabel}
+              {offsetLabel}
             </p>
             <span className="mt-0.5 text-[7px] font-semibold uppercase tracking-[0.06em] text-muted/80">
-              +{maxHour}h
+              hours
             </span>
 
             <div className="relative my-1.5 h-[112px] w-full">
@@ -91,14 +93,20 @@ export default function TimelineScrubber({
                 max={maxHour}
                 step={1}
                 value={hour}
-                aria-valuetext={timeLabel}
-                aria-label="Forecast hour"
+                aria-valuemin={0}
+                aria-valuemax={maxHour}
+                aria-valuenow={hour}
+                aria-valuetext={valueText}
+                aria-label="Hours ahead in forecast"
                 onChange={e => setHour(+e.target.value)}
               />
             </div>
 
-            <span className="text-[7px] font-semibold uppercase tracking-[0.06em] text-muted/80">
-              Now
+            <span className="text-[7px] font-semibold uppercase tracking-[0.04em] text-muted/80">
+              0h
+            </span>
+            <span className="mt-0.5 text-[7px] font-semibold tabular-nums text-muted/70">
+              {maxHour}h
             </span>
           </div>
 
@@ -177,10 +185,10 @@ export default function TimelineScrubber({
         collapsed ? 'px-3 py-2' : 'px-4 pb-4 pt-3.5',
       )}
       style={{ bottom }}
-      aria-label="Forecast timeline"
+      aria-label="Forecast timeline in hours"
       data-collapsed={collapsed ? 'true' : 'false'}
     >
-      <div className={cn('flex items-center justify-between gap-3', !collapsed && 'mb-3 items-start')}>
+      <div className={cn('flex items-center justify-between gap-3', !collapsed && 'mb-2.5')}>
         <button
           type="button"
           className="min-h-11 flex-1 cursor-pointer border-0 bg-transparent p-0 text-left font-sans active:scale-[0.99]"
@@ -188,12 +196,16 @@ export default function TimelineScrubber({
           aria-expanded={!collapsed}
           aria-label={collapsed ? 'Expand weather timeline' : 'Collapse weather timeline'}
         >
-          <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">
-            Weather along the corridor
-          </p>
-          <p className="mt-1 m-0 text-base font-semibold tracking-tight text-mist tabular-nums leading-tight">
-            {timeLabel}
-          </p>
+          <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+            <p className="m-0 text-lg font-semibold tracking-tight text-mist tabular-nums leading-none">
+              {offsetLabel}
+            </p>
+            {timeLabel ? (
+              <p className="m-0 text-[13px] tabular-nums text-muted">
+                {timeLabel}
+              </p>
+            ) : null}
+          </div>
         </button>
         <div className="flex shrink-0 items-center gap-2">
           <label className="inline-flex min-h-11 items-center gap-2">
@@ -252,7 +264,7 @@ export default function TimelineScrubber({
 
       {!collapsed && (
         <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3">
-          <span className="text-[11px] font-semibold tabular-nums text-muted">Now</span>
+          <span className="text-[11px] font-semibold text-muted">Now</span>
           <input
             className="timeline-range"
             type="range"
@@ -260,8 +272,11 @@ export default function TimelineScrubber({
             max={maxHour}
             step={1}
             value={hour}
-            aria-valuetext={timeLabel}
-            aria-label="Forecast hour"
+            aria-valuemin={0}
+            aria-valuemax={maxHour}
+            aria-valuenow={hour}
+            aria-valuetext={valueText}
+            aria-label="Hours ahead in forecast"
             onChange={e => setHour(+e.target.value)}
           />
           <span className="text-[11px] font-semibold tabular-nums text-muted">+{maxHour}h</span>

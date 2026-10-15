@@ -32,10 +32,12 @@ setWorkerUrl(workerUrl)
 
 const TEAL = '#C5E1E5'
 const TEAL_MUTED = 'rgba(197, 225, 229, 0.4)'
-const ALT = '#5a6e72'
+/** Soft mint-gray — readable as “other option” without competing with selected. */
+const ALT = '#8aa3a7'
 const CASING = '#061417'
+const ALT_OPACITY = 0.52
 /** Clear corridor heat without the neon blowout. */
-const HEAT_OPACITY = 0.86
+const HEAT_OPACITY = 0.78
 
 function popupHtml(c: Checkpoint, routeName: string) {
   const badge = c.load_escalated
@@ -123,14 +125,19 @@ function cpsCollection(data: PlanResponse, sel: string | null) {
   }
 }
 
-function heatCollection(data: PlanResponse) {
+function heatCollection(data: PlanResponse, sel: string | null) {
   const hm = data.heatmap
   if (!hm?.points?.length) {
     return { type: 'FeatureCollection' as const, features: [] }
   }
+  const selected = sel ?? data.recommended
+  const tagged = hm.points.some(p => p.route_id)
+  const points = tagged
+    ? hm.points.filter(p => p.route_id === selected)
+    : hm.points
   return {
     type: 'FeatureCollection' as const,
-    features: hm.points.map(p => {
+    features: points.map(p => {
       const props: Record<string, number> = {}
       p.weights.forEach((w, i) => { props[`w${i}`] = w })
       return {
@@ -190,129 +197,6 @@ function emptyFC() {
   return { type: 'FeatureCollection' as const, features: [] as never[] }
 }
 
-/** Soft glass-disk marker (Apple Maps–style) drawn to canvas for MapLibre images. */
-function drawSoftDisk(opts: {
-  size: number
-  fill: string
-  ring?: string
-  ringWidth?: number
-  glow?: string
-  glyph?: 'start' | 'end'
-}): HTMLCanvasElement {
-  const dpr = 2
-  const size = opts.size * dpr
-  const c = document.createElement('canvas')
-  c.width = size
-  c.height = size
-  const ctx = c.getContext('2d')!
-  const cx = size / 2
-  const cy = size / 2
-  const coreR = size * 0.26
-
-  // Ambient glow
-  if (opts.glow) {
-    const g = ctx.createRadialGradient(cx, cy, coreR * 0.35, cx, cy, size * 0.48)
-    g.addColorStop(0, opts.glow)
-    g.addColorStop(0.5, 'rgba(197,225,229,0.14)')
-    g.addColorStop(1, 'rgba(0,0,0,0)')
-    ctx.fillStyle = g
-    ctx.fillRect(0, 0, size, size)
-  }
-
-  // Soft contact shadow
-  ctx.save()
-  ctx.beginPath()
-  ctx.arc(cx, cy + dpr, coreR * 1.05, 0, Math.PI * 2)
-  ctx.fillStyle = 'rgba(0,0,0,0.3)'
-  ctx.filter = `blur(${2.4 * dpr}px)`
-  ctx.fill()
-  ctx.restore()
-
-  // Core disk
-  ctx.beginPath()
-  ctx.arc(cx, cy, coreR, 0, Math.PI * 2)
-  ctx.fillStyle = opts.fill
-  ctx.fill()
-
-  // Specular (glass highlight)
-  const hi = ctx.createRadialGradient(
-    cx - coreR * 0.35, cy - coreR * 0.4, 0,
-    cx, cy, coreR,
-  )
-  hi.addColorStop(0, 'rgba(255,255,255,0.62)')
-  hi.addColorStop(0.4, 'rgba(255,255,255,0.12)')
-  hi.addColorStop(1, 'rgba(255,255,255,0)')
-  ctx.beginPath()
-  ctx.arc(cx, cy, coreR, 0, Math.PI * 2)
-  ctx.fillStyle = hi
-  ctx.fill()
-
-  // Crisp ring
-  if (opts.ring) {
-    ctx.beginPath()
-    ctx.arc(cx, cy, coreR - (opts.ringWidth ?? 1.5) * dpr * 0.35, 0, Math.PI * 2)
-    ctx.strokeStyle = opts.ring
-    ctx.lineWidth = (opts.ringWidth ?? 1.75) * dpr
-    ctx.stroke()
-  }
-
-  // Tiny glyph for start / end
-  if (opts.glyph === 'start') {
-    ctx.fillStyle = 'rgba(6,20,23,0.9)'
-    ctx.beginPath()
-    const s = coreR * 0.42
-    ctx.moveTo(cx - s * 0.35, cy - s)
-    ctx.lineTo(cx - s * 0.35, cy + s)
-    ctx.lineTo(cx + s * 0.85, cy)
-    ctx.closePath()
-    ctx.fill()
-  } else if (opts.glyph === 'end') {
-    ctx.fillStyle = 'rgba(6,20,23,0.88)'
-    const s = coreR * 0.48
-    ctx.fillRect(cx - s * 0.5, cy - s * 0.5, s, s)
-  }
-
-  return c
-}
-
-function toImageData(c: HTMLCanvasElement): ImageData {
-  return c.getContext('2d')!.getImageData(0, 0, c.width, c.height)
-}
-
-function ensureMarkerImages(m: MapLibreMapType) {
-  if (!m.hasImage('mk-start')) {
-    const start = drawSoftDisk({
-      size: 36,
-      fill: '#1A9AA3',
-      ring: 'rgba(244,248,248,0.92)',
-      ringWidth: 1.75,
-      glow: 'rgba(26,154,163,0.55)',
-      glyph: 'start',
-    })
-    m.addImage('mk-start', toImageData(start), { pixelRatio: 2 })
-  }
-  if (!m.hasImage('mk-end')) {
-    const end = drawSoftDisk({
-      size: 36,
-      fill: '#F4F8F8',
-      ring: 'rgba(13,124,130,0.85)',
-      ringWidth: 1.85,
-      glow: 'rgba(244,248,248,0.4)',
-      glyph: 'end',
-    })
-    m.addImage('mk-end', toImageData(end), { pixelRatio: 2 })
-  }
-  if (!m.hasImage('mk-truck')) {
-    const truck = drawSoftDisk({
-      size: 32,
-      fill: '#C5E1E5',
-      ring: 'rgba(13,124,130,0.9)',
-      ringWidth: 1.6,
-      glow: 'rgba(197,225,229,0.5)',
-    })
-    m.addImage('mk-truck', toImageData(truck), { pixelRatio: 2 })
-  }
-}
 
 function reduceMotion() {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -419,7 +303,6 @@ export default function RouteMap({
   }, [])
 
   function ensureLayers(m: MapLibreMapType) {
-    ensureMarkerImages(m)
     if (!m.getSource('heat')) {
       m.addSource('heat', { type: 'geojson', data: emptyFC() })
     }
@@ -447,30 +330,32 @@ export default function RouteMap({
         layout: { visibility: 'none' },
         paint: {
           'heatmap-weight': ['coalesce', ['get', 'w0'], 0],
+          // Intensity amplifies High+ into yellow/orange; Low stays soft green.
           'heatmap-intensity': [
             'interpolate', ['linear'], ['zoom'],
-            3, mobile ? 0.95 : 1.25,
-            6, mobile ? 1.1 : 1.45,
-            9, mobile ? 1.25 : 1.65,
-            12, mobile ? 1.35 : 1.8,
+            3, mobile ? 0.95 : 1.2,
+            6, mobile ? 1.15 : 1.45,
+            9, mobile ? 1.35 : 1.7,
+            12, mobile ? 1.5 : 1.9,
           ],
           'heatmap-radius': [
             'interpolate', ['linear'], ['zoom'],
-            3, mobile ? 16 : 28,
-            5, mobile ? 22 : 38,
-            7, mobile ? 28 : 48,
-            9, mobile ? 34 : 58,
-            11, mobile ? 40 : 68,
+            3, mobile ? 12 : 20,
+            5, mobile ? 16 : 28,
+            7, mobile ? 22 : 36,
+            9, mobile ? 28 : 44,
+            11, mobile ? 34 : 52,
           ],
-          'heatmap-opacity': mobile ? 0.78 : HEAT_OPACITY,
+          'heatmap-opacity': mobile ? 0.7 : HEAT_OPACITY,
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
             0, 'rgba(13,17,22,0)',
-            0.08, 'rgba(45,164,78,0.5)',
-            0.22, 'rgba(45,164,78,0.72)',
-            0.4, 'rgba(212,167,44,0.8)',
-            0.6, 'rgba(251,133,0,0.88)',
-            0.8, 'rgba(207,34,46,0.94)',
+            0.08, 'rgba(45,164,78,0.28)',
+            0.18, 'rgba(45,164,78,0.55)',
+            0.30, 'rgba(180,190,60,0.72)',
+            0.42, 'rgba(212,167,44,0.85)',
+            0.58, 'rgba(251,133,0,0.9)',
+            0.75, 'rgba(207,34,46,0.94)',
             1, 'rgba(110,64,201,1)',
           ],
         },
@@ -478,18 +363,29 @@ export default function RouteMap({
     } else {
       m.setPaintProperty('heat-layer', 'heatmap-intensity', [
         'interpolate', ['linear'], ['zoom'],
-        3, mobile ? 0.95 : 1.25,
-        6, mobile ? 1.1 : 1.45,
-        9, mobile ? 1.25 : 1.65,
-        12, mobile ? 1.35 : 1.8,
+        3, mobile ? 0.95 : 1.2,
+        6, mobile ? 1.15 : 1.45,
+        9, mobile ? 1.35 : 1.7,
+        12, mobile ? 1.5 : 1.9,
+      ])
+      m.setPaintProperty('heat-layer', 'heatmap-color', [
+        'interpolate', ['linear'], ['heatmap-density'],
+        0, 'rgba(13,17,22,0)',
+        0.08, 'rgba(45,164,78,0.28)',
+        0.18, 'rgba(45,164,78,0.55)',
+        0.30, 'rgba(180,190,60,0.72)',
+        0.42, 'rgba(212,167,44,0.85)',
+        0.58, 'rgba(251,133,0,0.9)',
+        0.75, 'rgba(207,34,46,0.94)',
+        1, 'rgba(110,64,201,1)',
       ])
       m.setPaintProperty('heat-layer', 'heatmap-radius', [
         'interpolate', ['linear'], ['zoom'],
-        3, mobile ? 16 : 28,
-        5, mobile ? 22 : 38,
-        7, mobile ? 28 : 48,
-        9, mobile ? 34 : 58,
-        11, mobile ? 40 : 68,
+        3, mobile ? 12 : 20,
+        5, mobile ? 16 : 28,
+        7, mobile ? 22 : 36,
+        9, mobile ? 28 : 44,
+        11, mobile ? 34 : 52,
       ])
     }
 
@@ -502,9 +398,9 @@ export default function RouteMap({
     */
     const glowW = mobile ? 10 : 18
     const casingSel = mobile ? 5 : 9
-    const casingAlt = mobile ? 3 : 5.5
+    const casingAlt = mobile ? 3.25 : 5.75
     const lineSel = mobile ? 3.25 : 5.5
-    const lineAlt = mobile ? 1.5 : 2.25
+    const lineAlt = mobile ? 1.75 : 2.5
 
     if (!m.getLayer('routes-glow')) {
       // Sit under casing + core (hot reload may have already created those)
@@ -564,7 +460,7 @@ export default function RouteMap({
         paint: {
           'line-color': ALT,
           'line-width': lineAlt,
-          'line-opacity': 0.42,
+          'line-opacity': ALT_OPACITY,
           'line-blur': 0,
         },
       })
@@ -583,7 +479,12 @@ export default function RouteMap({
       ['==', ['get', 'selected'], 1], casingSel,
       casingAlt,
     ])
-    m.setPaintProperty('routes-casing', 'line-opacity', 0.92 * dimFactor)
+    // Softer casing on alts so they don’t read as a black void
+    m.setPaintProperty('routes-casing', 'line-opacity', [
+      'case',
+      ['==', ['get', 'selected'], 1], 0.92 * dimFactor,
+      0.55 * dimFactor,
+    ])
     m.setLayoutProperty('routes-casing', 'line-sort-key', ['get', 'z'])
 
     m.setPaintProperty('routes', 'line-color', [
@@ -597,11 +498,10 @@ export default function RouteMap({
       ['==', ['get', 'selected'], 1], lineSel,
       lineAlt,
     ])
-    // Quiet alts so overlapping alternatives don’t read as a second parallel path
     m.setPaintProperty('routes', 'line-opacity', [
       'case',
       ['==', ['get', 'selected'], 1], 1 * dimFactor,
-      0.28 * dimFactor,
+      ALT_OPACITY * dimFactor,
     ])
     m.setLayoutProperty('routes', 'line-sort-key', ['get', 'z'])
 
@@ -619,17 +519,34 @@ export default function RouteMap({
       })
     }
 
-    // Soft glass stops: glow bloom → white ring → risk core. Compact on phone; fat hit targets.
-    const cpGlowSel = mobile ? 11 : 15
-    const cpGlowAlt = mobile ? 8 : 11
-    const cpRingSel = mobile ? 6.5 : 8.5
-    const cpRingAlt = mobile ? 4.5 : 6
-    const cpCoreSel = mobile ? 4.25 : 5.5
-    const cpCoreAlt = mobile ? 3 : 4
+    // Solid risk circles — dark casing cuts them out of the bright heatmap.
+    const cpCoreSel = mobile ? 6.5 : 7.5
+    const cpCoreAlt = mobile ? 5.5 : 6.5
+    const cpCasingPad = mobile ? 2.25 : 2.5
+    const cpStroke = mobile ? 1.75 : 2
+    const endHalo = mobile ? 14 : 18
+    const endR = mobile ? 7 : 9
     const endLabel = mobile ? 11 : 13
-    const endOffset = mobile ? 1.7 : 2.05
-    const iconSize = mobile ? 0.72 : 0.92
-    const truckIcon = mobile ? 0.62 : 0.78
+    const endOffset = mobile ? 1.6 : 1.9
+    const truckHalo = mobile ? 12 : 16
+    const truckR = mobile ? 6 : 7.5
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- MapLibre data-driven expression
+    const coreRadius: any = [
+      'case',
+      ['==', ['get', 'selected'], 1],
+      ['+', cpCoreSel, ['*', ['min', ['coalesce', ['get', 'riskLevel'], 0], 3], 0.35]],
+      cpCoreAlt,
+    ]
+
+    // Drop leftover symbol layers from earlier experiments
+    for (const id of ['cps', 'ends', 'truck'] as const) {
+      const layer = m.getLayer(id)
+      if (layer && layer.type === 'symbol') m.removeLayer(id)
+    }
+    // Colored glow blended into heat — replace with dark casing instead
+    if (m.getLayer('cps-glow')) m.removeLayer('cps-glow')
+    if (m.getLayer('cps-ring')) m.removeLayer('cps-ring')
 
     if (!m.getLayer('cps-hit')) {
       m.addLayer({
@@ -640,83 +557,39 @@ export default function RouteMap({
           'circle-radius': [
             'interpolate', ['linear'], ['zoom'],
             4, mobile ? 18 : 16,
-            8, mobile ? 22 : 22,
+            8, 22,
             12, mobile ? 26 : 28,
           ],
           'circle-color': '#fff',
           'circle-opacity': 0,
         },
       })
-    } else {
-      m.setPaintProperty('cps-hit', 'circle-radius', [
-        'interpolate', ['linear'], ['zoom'],
-        4, mobile ? 18 : 16,
-        8, mobile ? 22 : 22,
-        12, mobile ? 26 : 28,
-      ])
     }
 
-    // Soft color bloom under each stop
-    if (!m.getLayer('cps-glow')) {
+    // Dark plate under every stop — separation from heatmap green
+    if (!m.getLayer('cps-casing')) {
       m.addLayer({
-        id: 'cps-glow',
+        id: 'cps-casing',
         type: 'circle',
         source: 'cps',
         paint: {
-          'circle-radius': [
-            'case',
-            ['==', ['get', 'selected'], 1],
-            ['+', cpGlowSel, ['*', ['coalesce', ['get', 'riskLevel'], 0], 1.1]],
-            ['+', cpGlowAlt, ['*', ['coalesce', ['get', 'riskLevel'], 0], 0.7]],
-          ],
-          'circle-color': ['get', 'color'],
+          'circle-radius': ['+', coreRadius, cpCasingPad],
+          'circle-color': '#061417',
           'circle-opacity': [
             'case',
-            ['==', ['get', 'selected'], 1], 0.38,
-            0.16,
+            ['==', ['get', 'selected'], 1], 0.92,
+            0.78,
           ],
-          'circle-blur': 0.85,
+          'circle-stroke-width': 0,
         },
-      })
+      }, 'cps-hit')
     } else {
-      m.setPaintProperty('cps-glow', 'circle-radius', [
+      m.setPaintProperty('cps-casing', 'circle-radius', ['+', coreRadius, cpCasingPad])
+      m.setPaintProperty('cps-casing', 'circle-opacity', [
         'case',
-        ['==', ['get', 'selected'], 1],
-        ['+', cpGlowSel, ['*', ['coalesce', ['get', 'riskLevel'], 0], 1.1]],
-        ['+', cpGlowAlt, ['*', ['coalesce', ['get', 'riskLevel'], 0], 0.7]],
+        ['==', ['get', 'selected'], 1], 0.92,
+        0.78,
       ])
-    }
-
-    // Crisp mist ring (Apple-style edge)
-    if (!m.getLayer('cps-ring')) {
-      m.addLayer({
-        id: 'cps-ring',
-        type: 'circle',
-        source: 'cps',
-        paint: {
-          'circle-radius': [
-            'case',
-            ['==', ['get', 'selected'], 1], cpRingSel,
-            cpRingAlt,
-          ],
-          'circle-color': '#ffffff',
-          'circle-opacity': 0,
-          'circle-stroke-color': 'rgba(244,248,248,0.92)',
-          'circle-stroke-width': mobile ? 1.5 : 2,
-          'circle-stroke-opacity': [
-            'case',
-            ['==', ['get', 'selected'], 1], 0.95,
-            0.45,
-          ],
-        },
-      })
-    } else {
-      m.setPaintProperty('cps-ring', 'circle-radius', [
-        'case',
-        ['==', ['get', 'selected'], 1], cpRingSel,
-        cpRingAlt,
-      ])
-      m.setPaintProperty('cps-ring', 'circle-stroke-width', mobile ? 1.5 : 2)
     }
 
     if (!m.getLayer('cps')) {
@@ -725,80 +598,95 @@ export default function RouteMap({
         type: 'circle',
         source: 'cps',
         paint: {
-          'circle-radius': [
-            'case',
-            ['==', ['get', 'selected'], 1],
-            ['+', cpCoreSel, ['*', ['min', ['coalesce', ['get', 'riskLevel'], 0], 3], 0.45]],
-            cpCoreAlt,
-          ],
+          'circle-radius': coreRadius,
           'circle-color': ['get', 'color'],
-          'circle-opacity': [
-            'case',
-            ['==', ['get', 'selected'], 1], 1,
-            0.42,
+          'circle-opacity': 1,
+          'circle-stroke-color': '#F4F8F8',
+          'circle-stroke-width': cpStroke,
+          'circle-stroke-opacity': 1,
+        },
+      })
+    } else {
+      m.setPaintProperty('cps', 'circle-radius', coreRadius)
+      m.setPaintProperty('cps', 'circle-opacity', 1)
+      m.setPaintProperty('cps', 'circle-color', ['get', 'color'])
+      m.setPaintProperty('cps', 'circle-stroke-color', '#F4F8F8')
+      m.setPaintProperty('cps', 'circle-stroke-width', cpStroke)
+      m.setPaintProperty('cps', 'circle-stroke-opacity', 1)
+    }
+
+    // Keep stack: casing under fill
+    if (m.getLayer('cps-casing') && m.getLayer('cps')) {
+      try { m.moveLayer('cps-casing', 'cps') } catch { /* already ordered */ }
+    }
+
+    if (!m.getLayer('ends-halo')) {
+      m.addLayer({
+        id: 'ends-halo',
+        type: 'circle',
+        source: 'ends',
+        paint: {
+          'circle-radius': endHalo,
+          'circle-color': [
+            'match', ['get', 'kind'],
+            'start', 'rgba(26,154,163,0.4)',
+            'rgba(244,248,248,0.3)',
           ],
-          'circle-blur': 0.05,
+          'circle-blur': 0.55,
           'circle-stroke-width': 0,
         },
       })
     } else {
-      m.setPaintProperty('cps', 'circle-radius', [
-        'case',
-        ['==', ['get', 'selected'], 1],
-        ['+', cpCoreSel, ['*', ['min', ['coalesce', ['get', 'riskLevel'], 0], 3], 0.45]],
-        cpCoreAlt,
-      ])
-      m.setPaintProperty('cps', 'circle-blur', 0.05)
-      m.setPaintProperty('cps', 'circle-stroke-width', 0)
+      m.setPaintProperty('ends-halo', 'circle-radius', endHalo)
     }
 
-    // Migrate legacy circle markers → symbol icons
-    if (m.getLayer('ends-halo')) m.removeLayer('ends-halo')
-    if (m.getLayer('ends-label')) m.removeLayer('ends-label')
-    const endsLayer = m.getLayer('ends')
-    if (endsLayer && endsLayer.type !== 'symbol') m.removeLayer('ends')
-    const truckLayer = m.getLayer('truck')
-    if (truckLayer && truckLayer.type !== 'symbol') m.removeLayer('truck')
-
-    // Start / End — custom glass icons + label
     if (!m.getLayer('ends')) {
       m.addLayer({
         id: 'ends',
+        type: 'circle',
+        source: 'ends',
+        paint: {
+          'circle-radius': endR,
+          'circle-color': [
+            'match', ['get', 'kind'],
+            'start', '#1A9AA3',
+            '#F4F8F8',
+          ],
+          'circle-stroke-color': '#061417',
+          'circle-stroke-width': mobile ? 2 : 2.5,
+          'circle-stroke-opacity': 1,
+        },
+      })
+    } else {
+      m.setPaintProperty('ends', 'circle-radius', endR)
+      m.setPaintProperty('ends', 'circle-stroke-width', mobile ? 2 : 2.5)
+    }
+
+    if (!m.getLayer('ends-label')) {
+      m.addLayer({
+        id: 'ends-label',
         type: 'symbol',
         source: 'ends',
         layout: {
-          'icon-image': [
-            'match', ['get', 'kind'],
-            'start', 'mk-start',
-            'mk-end',
-          ],
-          'icon-size': iconSize,
-          'icon-allow-overlap': true,
-          'icon-ignore-placement': true,
           'text-field': ['get', 'label'],
           'text-font': pickLabelFont(m),
           'text-size': endLabel,
           'text-offset': [0, endOffset],
           'text-anchor': 'top',
           'text-letter-spacing': 0.02,
-          'text-max-width': 8,
           'text-allow-overlap': true,
           'text-ignore-placement': true,
-          'symbol-sort-key': 10,
         },
         paint: {
           'text-color': '#FFFFFF',
           'text-halo-color': 'rgba(6,20,23,0.95)',
           'text-halo-width': mobile ? 1.6 : 2.2,
           'text-halo-blur': 0.35,
-          'icon-opacity': 1,
         },
       })
     } else {
-      m.setLayoutProperty('ends', 'icon-size', iconSize)
-      m.setLayoutProperty('ends', 'text-size', endLabel)
-      m.setLayoutProperty('ends', 'text-offset', [0, endOffset])
-      m.setPaintProperty('ends', 'text-halo-width', mobile ? 1.6 : 2.2)
+      m.setLayoutProperty('ends-label', 'text-size', endLabel)
+      m.setLayoutProperty('ends-label', 'text-offset', [0, endOffset])
     }
 
     if (!m.getLayer('truck-halo')) {
@@ -807,32 +695,30 @@ export default function RouteMap({
         type: 'circle',
         source: 'truck',
         paint: {
-          'circle-radius': mobile ? 14 : 20,
-          'circle-color': 'rgba(197, 225, 229, 0.32)',
-          'circle-blur': 0.75,
+          'circle-radius': truckHalo,
+          'circle-color': 'rgba(197, 225, 229, 0.3)',
+          'circle-blur': 0.7,
           'circle-stroke-width': 0,
         },
       })
     } else {
-      m.setPaintProperty('truck-halo', 'circle-radius', mobile ? 14 : 20)
-      m.setPaintProperty('truck-halo', 'circle-blur', 0.75)
+      m.setPaintProperty('truck-halo', 'circle-radius', truckHalo)
     }
 
     if (!m.getLayer('truck')) {
       m.addLayer({
         id: 'truck',
-        type: 'symbol',
+        type: 'circle',
         source: 'truck',
-        layout: {
-          'icon-image': 'mk-truck',
-          'icon-size': truckIcon,
-          'icon-allow-overlap': true,
-          'icon-ignore-placement': true,
+        paint: {
+          'circle-radius': truckR,
+          'circle-color': '#C5E1E5',
+          'circle-stroke-color': '#0D7C82',
+          'circle-stroke-width': 2.5,
         },
-        paint: { 'icon-opacity': 1 },
       })
     } else {
-      m.setLayoutProperty('truck', 'icon-size', truckIcon)
+      m.setPaintProperty('truck', 'circle-radius', truckR)
     }
   }
 
@@ -940,10 +826,15 @@ export default function RouteMap({
     }
   }
 
+  function heatOpacity() {
+    return window.matchMedia('(max-width: 860px)').matches ? 0.7 : HEAT_OPACITY
+  }
+
   function applyHeatPaint(m: MapLibreMapType) {
     if (!m.getLayer('heat-layer')) return
     const h = hourRef.current
     m.setPaintProperty('heat-layer', 'heatmap-weight', ['coalesce', ['get', `w${h}`], 0])
+    m.setPaintProperty('heat-layer', 'heatmap-opacity', heatOpacity() * (dimRef.current ? 0.35 : 1))
     m.setLayoutProperty(
       'heat-layer',
       'visibility',
@@ -951,43 +842,12 @@ export default function RouteMap({
     )
   }
 
+  /** Paint-only hour swap. Point positions stay fixed (corridor ribbon); weights change. */
   function crossfadeHeatHour(m: MapLibreMapType, nextHour: number) {
     cancelAnimationFrame(heatRafRef.current)
     if (!m.getLayer('heat-layer')) return
-
-    if (reduceMotion()) {
-      m.setPaintProperty('heat-layer', 'heatmap-weight', ['coalesce', ['get', `w${nextHour}`], 0])
-      m.setPaintProperty('heat-layer', 'heatmap-opacity', HEAT_OPACITY)
-      return
-    }
-
-    const start = performance.now()
-    const fade = 140
-    const total = 320
-    let swapped = false
-
-    const tick = (now: number) => {
-      if (map.current !== m || !m.getLayer('heat-layer')) return
-      const t = now - start
-      if (t < fade) {
-        const u = t / fade
-        m.setPaintProperty('heat-layer', 'heatmap-opacity', HEAT_OPACITY * (1 - u) + 0.18 * u)
-        heatRafRef.current = requestAnimationFrame(tick)
-        return
-      }
-      if (!swapped) {
-        swapped = true
-        m.setPaintProperty('heat-layer', 'heatmap-weight', ['coalesce', ['get', `w${nextHour}`], 0])
-      }
-      if (t < total) {
-        const u = (t - fade) / (total - fade)
-        m.setPaintProperty('heat-layer', 'heatmap-opacity', 0.18 * (1 - u) + HEAT_OPACITY * u)
-        heatRafRef.current = requestAnimationFrame(tick)
-        return
-      }
-      m.setPaintProperty('heat-layer', 'heatmap-opacity', HEAT_OPACITY)
-    }
-    heatRafRef.current = requestAnimationFrame(tick)
+    m.setPaintProperty('heat-layer', 'heatmap-weight', ['coalesce', ['get', `w${nextHour}`], 0])
+    m.setPaintProperty('heat-layer', 'heatmap-opacity', heatOpacity() * (dimRef.current ? 0.35 : 1))
   }
 
   function syncTruck(m: MapLibreMapType) {
@@ -1010,6 +870,9 @@ export default function RouteMap({
     ;(m.getSource('routes') as GeoJSONSource).setData(routesCollection(d, sel))
     if (m.getSource('cps')) {
       ;(m.getSource('cps') as GeoJSONSource).setData(cpsCollection(d, sel))
+    }
+    if (m.getSource('heat')) {
+      ;(m.getSource('heat') as GeoJSONSource).setData(heatCollection(d, sel))
     }
     syncTruck(m)
   }
@@ -1044,7 +907,9 @@ export default function RouteMap({
       ;(m.getSource('cps') as GeoJSONSource).setData(
         cpsCollection(d, selectedRef.current),
       )
-      ;(m.getSource('heat') as GeoJSONSource).setData(heatCollection(d))
+      ;(m.getSource('heat') as GeoJSONSource).setData(
+        heatCollection(d, selectedRef.current),
+      )
       ;(m.getSource('ends') as GeoJSONSource).setData(endsCollection(d))
       applyHeatPaint(m)
       syncTruck(m)
@@ -1110,17 +975,27 @@ export default function RouteMap({
     m.setPaintProperty('routes', 'line-opacity', [
       'case',
       ['==', ['get', 'selected'], 1], 1 * dimFactor,
-      0.42 * dimFactor,
+      ALT_OPACITY * dimFactor,
     ])
-    if (m.getLayer('cps')) {
-      m.setPaintProperty('cps', 'circle-opacity', [
+    if (m.getLayer('routes-casing')) {
+      m.setPaintProperty('routes-casing', 'line-opacity', [
         'case',
-        ['==', ['get', 'selected'], 1], 1 * dimFactor,
-        0.4 * dimFactor,
+        ['==', ['get', 'selected'], 1], 0.92 * dimFactor,
+        0.55 * dimFactor,
+      ])
+    }
+    if (m.getLayer('cps')) {
+      m.setPaintProperty('cps', 'circle-opacity', 1 * dimFactor)
+    }
+    if (m.getLayer('cps-casing')) {
+      m.setPaintProperty('cps-casing', 'circle-opacity', [
+        'case',
+        ['==', ['get', 'selected'], 1], 0.92 * dimFactor,
+        0.78 * dimFactor,
       ])
     }
     if (m.getLayer('heat-layer')) {
-      m.setPaintProperty('heat-layer', 'heatmap-opacity', HEAT_OPACITY * (dimmed ? 0.35 : 1))
+      m.setPaintProperty('heat-layer', 'heatmap-opacity', heatOpacity() * (dimmed ? 0.35 : 1))
     }
   }, [dimmed])
 
