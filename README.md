@@ -8,8 +8,6 @@ This is a Spotter AI take-home: a React and Django app that helps a driver compa
 |---|---|
 | App | https://spotter-assessment-theta.vercel.app |
 | API | https://spotter-assessment-api.vercel.app |
-| GitHub | https://github.com/Vibhor1603/spotter-assessment |
-| Loom | _add walkthrough link_ |
 
 A good first trip is Denver, CO to Salt Lake City, UT, with a 35,000 lb load and weather stops every 25 miles.
 
