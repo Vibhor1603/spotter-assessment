@@ -275,6 +275,10 @@ function drawSoftDisk(opts: {
   return c
 }
 
+function toImageData(c: HTMLCanvasElement): ImageData {
+  return c.getContext('2d')!.getImageData(0, 0, c.width, c.height)
+}
+
 function ensureMarkerImages(m: MapLibreMapType) {
   if (!m.hasImage('mk-start')) {
     const start = drawSoftDisk({
@@ -285,7 +289,7 @@ function ensureMarkerImages(m: MapLibreMapType) {
       glow: 'rgba(26,154,163,0.55)',
       glyph: 'start',
     })
-    m.addImage('mk-start', start, { pixelRatio: 2 })
+    m.addImage('mk-start', toImageData(start), { pixelRatio: 2 })
   }
   if (!m.hasImage('mk-end')) {
     const end = drawSoftDisk({
@@ -296,7 +300,7 @@ function ensureMarkerImages(m: MapLibreMapType) {
       glow: 'rgba(244,248,248,0.4)',
       glyph: 'end',
     })
-    m.addImage('mk-end', end, { pixelRatio: 2 })
+    m.addImage('mk-end', toImageData(end), { pixelRatio: 2 })
   }
   if (!m.hasImage('mk-truck')) {
     const truck = drawSoftDisk({
@@ -306,7 +310,7 @@ function ensureMarkerImages(m: MapLibreMapType) {
       ringWidth: 1.6,
       glow: 'rgba(197,225,229,0.5)',
     })
-    m.addImage('mk-truck', truck, { pixelRatio: 2 })
+    m.addImage('mk-truck', toImageData(truck), { pixelRatio: 2 })
   }
 }
 
