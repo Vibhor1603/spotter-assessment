@@ -158,15 +158,52 @@
 
 /* Larger range thumb on phone for thumb reach */
 @media (max-width: 860px) {
-  .timeline-range::-webkit-slider-thumb {
+  .timeline-range:not(.timeline-range-vertical)::-webkit-slider-thumb {
     width: 28px;
     height: 28px;
     margin-top: -11px;
   }
-  .timeline-range::-moz-range-thumb {
+  .timeline-range:not(.timeline-range-vertical)::-moz-range-thumb {
     width: 28px;
     height: 28px;
   }
+}
+
+/*
+  Compact vertical forecast rail (rotated range) — matches zoom ctrl width.
+*/
+.timeline-range-vertical {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 108px;
+  height: 3px;
+  margin: 0;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  transform-origin: center;
+  background: linear-gradient(
+    90deg,
+    rgba(61, 154, 122, 0.7),
+    rgba(212, 162, 76, 0.8),
+    rgba(240, 113, 120, 0.85)
+  );
+}
+.timeline-range-vertical::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  box-shadow: 0 0 0 3px rgba(197, 225, 229, 0.22), 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+.timeline-range-vertical::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  box-shadow: 0 0 0 3px rgba(197, 225, 229, 0.22), 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+.timeline-range-vertical::-webkit-slider-runnable-track {
+  height: 3px;
+}
+.timeline-range-vertical::-moz-range-track {
+  height: 3px;
 }
 
 /* Landscape phones: keep sheet usable, prefer half max */

@@ -215,10 +215,6 @@ export default function App() {
     markInputsDirty()
   }
 
-  const scrubberBottom = isMobile
-    ? Math.max(sheetHeight, 96) + 10
-    : 16
-
   const hideChrome = isMobile && !!data && sheetSnap === 'peek'
 
   const panel = (
@@ -243,9 +239,9 @@ export default function App() {
         </header>
       )}
 
-      {/* Mobile: trip chip always; swipe cards only at peek (half/full use vertical list) */}
-      {data && isMobile && (
-        <div data-sheet-peek-body data-sheet-chrome className="flex shrink-0 flex-col gap-2">
+      {/* Mobile: trip chip when sheet is raised (peek is handle-only so the map stays open) */}
+      {data && isMobile && sheetSnap !== 'peek' && (
+        <div data-sheet-chrome className="flex shrink-0 flex-col gap-2">
           <button
             type="button"
             className={cn(
@@ -270,33 +266,6 @@ export default function App() {
               {shortPlace(originText)} → {shortPlace(destText)}
             </p>
           </button>
-          {sheetSnap === 'peek' && (
-            <div
-              className={cn(
-                '-mx-1 flex gap-2 overflow-x-auto overscroll-x-contain px-1 pb-0.5',
-                'snap-x snap-mandatory scroll-px-1',
-                stale && 'opacity-55 saturate-70',
-              )}
-              style={{ WebkitOverflowScrolling: 'touch' }}
-              aria-label="Routes"
-              data-no-drag
-            >
-              {data.routes.map((r, i) => (
-                <RouteCard
-                  key={r.id}
-                  route={r}
-                  rank={i}
-                  recommended={r.id === data.recommended}
-                  selected={r.id === selectedId}
-                  why={undefined}
-                  loadLb={load}
-                  onSelect={() => setSelectedId(r.id)}
-                  compact
-                  className="w-[min(240px,70vw)] shrink-0 snap-start"
-                />
-              ))}
-            </div>
-          )}
         </div>
       )}
 
@@ -600,6 +569,7 @@ export default function App() {
           onSnapChange={setSheetSnap}
           onHeightChange={onSheetHeight}
           fitContent={!data && formOpen}
+          handleOnlyPeek={!!data}
           footer={
             formOpen ? (
               <button
@@ -698,8 +668,8 @@ export default function App() {
             showHeatmap={showHeatmap}
             onHour={setHour}
             onToggleHeatmap={setShowHeatmap}
-            bottomOffset={scrubberBottom}
-            defaultCollapsed={isMobile}
+            orientation={isMobile ? 'vertical' : 'horizontal'}
+            bottomOffset={16}
           />
         )}
 

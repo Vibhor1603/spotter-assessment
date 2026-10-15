@@ -63,13 +63,21 @@ function rankById(data: PlanResponse): Map<string, number> {
 
 function routesCollection(data: PlanResponse, sel: string | null) {
   const selected = sel ?? data.recommended
+  // Draw selected last so shared corridors don’t show a doubled “twin” stroke on top.
+  const ordered = [...data.routes].sort((a, b) => {
+    const as = a.id === selected ? 1 : 0
+    const bs = b.id === selected ? 1 : 0
+    return as - bs
+  })
   return {
     type: 'FeatureCollection' as const,
-    features: data.routes.map(r => ({
+    features: ordered.map(r => ({
       type: 'Feature' as const,
       properties: {
         id: r.id,
         selected: r.id === selected ? 1 : 0,
+        // Higher sort key paints above overlapping alternatives
+        z: r.id === selected ? 2 : 1,
       },
       geometry: { type: 'LineString' as const, coordinates: r.geometry },
     })),
@@ -302,6 +310,9 @@ export default function RouteMap({
       m.addSource('truck', { type: 'geojson', data: emptyFC() })
     }
 
+    // Phone: tighter heat halo + thinner routes so the map isn’t swallowed.
+    const mobile = window.matchMedia('(max-width: 860px)').matches
+
     if (!m.getLayer('heat-layer')) {
       m.addLayer({
         id: 'heat-layer',
@@ -312,20 +323,20 @@ export default function RouteMap({
           'heatmap-weight': ['coalesce', ['get', 'w0'], 0],
           'heatmap-intensity': [
             'interpolate', ['linear'], ['zoom'],
-            3, 1.25,
-            6, 1.45,
-            9, 1.65,
-            12, 1.8,
+            3, mobile ? 0.95 : 1.25,
+            6, mobile ? 1.1 : 1.45,
+            9, mobile ? 1.25 : 1.65,
+            12, mobile ? 1.35 : 1.8,
           ],
           'heatmap-radius': [
             'interpolate', ['linear'], ['zoom'],
-            3, 28,
-            5, 38,
-            7, 48,
-            9, 58,
-            11, 68,
+            3, mobile ? 16 : 28,
+            5, mobile ? 22 : 38,
+            7, mobile ? 28 : 48,
+            9, mobile ? 34 : 58,
+            11, mobile ? 40 : 68,
           ],
-          'heatmap-opacity': HEAT_OPACITY,
+          'heatmap-opacity': mobile ? 0.78 : HEAT_OPACITY,
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
             0, 'rgba(13,17,22,0)',
@@ -338,6 +349,61 @@ export default function RouteMap({
           ],
         },
       })
+    } else {
+      m.setPaintProperty('heat-layer', 'heatmap-intensity', [
+        'interpolate', ['linear'], ['zoom'],
+        3, mobile ? 0.95 : 1.25,
+        6, mobile ? 1.1 : 1.45,
+        9, mobile ? 1.25 : 1.65,
+        12, mobile ? 1.35 : 1.8,
+      ])
+      m.setPaintProperty('heat-layer', 'heatmap-radius', [
+        'interpolate', ['linear'], ['zoom'],
+        3, mobile ? 16 : 28,
+        5, mobile ? 22 : 38,
+        7, mobile ? 28 : 48,
+        9, mobile ? 34 : 58,
+        11, mobile ? 40 : 68,
+      ])
+    }
+
+    /*
+      Single cohesive stroke (no “railroad” double edge):
+      1) Soft blurred mint glow (selected only) — presence without hard rim
+      2) Dark hairline casing — separation from basemap, not a second teal edge
+      3) Solid opaque core — the route you actually see
+      Alts stay thin + quiet so shared highway segments don’t look twinned.
+    */
+    const glowW = mobile ? 10 : 18
+    const casingSel = mobile ? 5 : 9
+    const casingAlt = mobile ? 3 : 5.5
+    const lineSel = mobile ? 3.25 : 5.5
+    const lineAlt = mobile ? 1.5 : 2.25
+
+    if (!m.getLayer('routes-glow')) {
+      // Sit under casing + core (hot reload may have already created those)
+      const before = m.getLayer('routes-casing')
+        ? 'routes-casing'
+        : m.getLayer('routes')
+          ? 'routes'
+          : undefined
+      m.addLayer({
+        id: 'routes-glow',
+        type: 'line',
+        source: 'routes',
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          'line-sort-key': ['get', 'z'],
+        },
+        paint: {
+          'line-color': TEAL,
+          'line-width': glowW,
+          'line-opacity': 0,
+          'line-blur': mobile ? 6 : 10,
+        },
+        filter: ['==', ['get', 'selected'], 1],
+      }, before)
     }
 
     if (!m.getLayer('routes-casing')) {
@@ -345,11 +411,16 @@ export default function RouteMap({
         id: 'routes-casing',
         type: 'line',
         source: 'routes',
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          'line-sort-key': ['get', 'z'],
+        },
         paint: {
           'line-color': CASING,
-          'line-width': 6,
-          'line-opacity': 0.9,
+          'line-width': casingAlt,
+          'line-opacity': 0.92,
+          'line-blur': 0,
         },
       })
     }
@@ -359,36 +430,54 @@ export default function RouteMap({
         id: 'routes',
         type: 'line',
         source: 'routes',
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          'line-sort-key': ['get', 'z'],
+        },
         paint: {
           'line-color': ALT,
-          'line-width': 2.5,
+          'line-width': lineAlt,
           'line-opacity': 0.42,
+          'line-blur': 0,
         },
       })
     }
 
     const dimFactor = dimRef.current ? 0.35 : 1
+    m.setPaintProperty('routes-glow', 'line-width', glowW)
+    m.setPaintProperty('routes-glow', 'line-blur', mobile ? 6 : 10)
+    m.setPaintProperty('routes-glow', 'line-opacity', (mobile ? 0.22 : 0.28) * dimFactor)
+    m.setFilter('routes-glow', ['==', ['get', 'selected'], 1])
+
+    m.setPaintProperty('routes-casing', 'line-color', CASING)
+    m.setPaintProperty('routes-casing', 'line-blur', 0)
     m.setPaintProperty('routes-casing', 'line-width', [
       'case',
-      ['==', ['get', 'selected'], 1], 11,
-      6,
+      ['==', ['get', 'selected'], 1], casingSel,
+      casingAlt,
     ])
+    m.setPaintProperty('routes-casing', 'line-opacity', 0.92 * dimFactor)
+    m.setLayoutProperty('routes-casing', 'line-sort-key', ['get', 'z'])
+
     m.setPaintProperty('routes', 'line-color', [
       'case',
       ['==', ['get', 'selected'], 1], TEAL,
       ALT,
     ])
+    m.setPaintProperty('routes', 'line-blur', 0)
     m.setPaintProperty('routes', 'line-width', [
       'case',
-      ['==', ['get', 'selected'], 1], 6.5,
-      2.5,
+      ['==', ['get', 'selected'], 1], lineSel,
+      lineAlt,
     ])
+    // Quiet alts so overlapping alternatives don’t read as a second parallel path
     m.setPaintProperty('routes', 'line-opacity', [
       'case',
       ['==', ['get', 'selected'], 1], 1 * dimFactor,
-      0.42 * dimFactor,
+      0.28 * dimFactor,
     ])
+    m.setLayoutProperty('routes', 'line-sort-key', ['get', 'z'])
 
     if (!m.getLayer('routes-hit')) {
       m.addLayer({
@@ -405,7 +494,6 @@ export default function RouteMap({
     }
 
     // Invisible fat hit targets (≥44px feel on phone)
-    const mobile = window.matchMedia('(max-width: 860px)').matches
     if (!m.getLayer('cps-hit')) {
       m.addLayer({
         id: 'cps-hit',
@@ -649,7 +737,8 @@ export default function RouteMap({
       const mobile = window.matchMedia('(max-width: 860px)').matches
       m.fitBounds(b, {
         padding: mobile
-          ? { top: 88, bottom: 220, left: 28, right: 28 }
+          // Right inset clears the slim forecast rail under zoom controls
+          ? { top: 88, bottom: 96, left: 24, right: 52 }
           : { top: 96, bottom: 120, left: 56, right: 56 },
         maxZoom: 8.2,
         duration: reduceMotion() ? 0 : duration,

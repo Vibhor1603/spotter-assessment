@@ -22,6 +22,11 @@ type Props = {
    * Used for the planning form before routes exist.
    */
   fitContent?: boolean
+  /**
+   * Peek shows only the grab handle (map-first after routes load).
+   * Pull up to half/full for trip details again.
+   */
+  handleOnlyPeek?: boolean
   /** Called whenever the visible sheet height (px) changes — for map overlays. */
   onHeightChange?: (heightPx: number) => void
   className?: string
@@ -46,15 +51,28 @@ function safeBottom() {
   return h
 }
 
-function snapHeights(vh: number, peekBody = 0): Record<SheetSnap, number> {
+function snapHeights(
+  vh: number,
+  peekBody = 0,
+  handleOnlyPeek = false,
+): Record<SheetSnap, number> {
   const sb = safeBottom()
-  // Handle (~44) + measured peek body (trip + swipe cards), hard-capped so map stays visible
-  const peekRaw = Math.round(44 + sb + Math.max(peekBody, 96))
   const half = Math.round(vh * 0.55)
   const full = Math.round(Math.min(vh * 0.92, vh - 8))
-  const peek = Math.min(peekRaw, Math.round(vh * 0.34), half - 48)
+  // Handle strip ≈ pt + min-h-11 button + pb. Keep peek map-first when routes show.
+  // Include safe-area so the pill sits above the home indicator (handle grows via CSS).
+  const handleH = 56
+  let peek: number
+  if (handleOnlyPeek) {
+    peek = Math.round(handleH + sb)
+  } else {
+    // Handle + measured peek body (trip + cards), hard-capped so map stays visible
+    const peekRaw = Math.round(handleH + sb + Math.max(peekBody, 96))
+    peek = Math.min(peekRaw, Math.round(vh * 0.34), half - 48)
+    peek = Math.max(peek, 120 + sb)
+  }
   return {
-    peek: Math.max(peek, 120 + sb),
+    peek,
     half: Math.max(half, peek + 56),
     full: Math.max(full, half + 40),
   }
@@ -90,13 +108,14 @@ function nearestSnap(height: number, heights: Record<SheetSnap, number>, velocit
  * Desktop callers should not mount this — keep sidebar layout untouched.
  */
 export default function BottomSheet({
-  snap, onSnapChange, children, footer, fitContent = false, onHeightChange, className,
+  snap, onSnapChange, children, footer, fitContent = false, handleOnlyPeek = false,
+  onHeightChange, className,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [vh, setVh] = useState(() => typeof window !== 'undefined' ? window.innerHeight : 800)
   const [peekBody, setPeekBody] = useState(0)
   const [fitH, setFitH] = useState(0)
-  const heights = snapHeights(vh, peekBody)
+  const heights = snapHeights(vh, peekBody, handleOnlyPeek)
   const maxH = heights.full
 
   const restingH = fitContent && fitH > 0
@@ -193,10 +212,10 @@ export default function BottomSheet({
       setHeight(h)
       return
     }
-    const h = snapHeights(window.innerHeight, peekBody)[next]
+    const h = snapHeights(window.innerHeight, peekBody, handleOnlyPeek)[next]
     heightRef.current = h
     setHeight(h)
-  }, [onSnapChange, peekBody, fitContent, fitH, maxH])
+  }, [onSnapChange, peekBody, fitContent, fitH, maxH, handleOnlyPeek])
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (e.button !== 0) return
@@ -289,7 +308,10 @@ export default function BottomSheet({
         height: maxH,
         transform: `translate3d(0, ${translate}px, 0)`,
         transition: duration ? `transform ${duration}ms ${EASE}` : 'none',
-        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+        // Handle-only peek: safe-area on the handle. Raised sheet: pad the root again.
+        paddingBottom: handleOnlyPeek && snap === 'peek'
+          ? 0
+          : 'env(safe-area-inset-bottom, 0px)',
         paddingLeft: 'max(0px, env(safe-area-inset-left, 0px))',
         paddingRight: 'max(0px, env(safe-area-inset-right, 0px))',
         touchAction: dragging ? 'none' : 'auto',
@@ -304,7 +326,13 @@ export default function BottomSheet({
       <div
         data-sheet-handle
         data-sheet-chrome
-        className="flex shrink-0 cursor-grab justify-center px-0 pb-1 pt-1.5 active:cursor-grabbing"
+        className={cn(
+          'flex shrink-0 cursor-grab justify-center px-0 pt-1.5 active:cursor-grabbing',
+          // Collapsed after routes: pad handle with home-indicator inset
+          handleOnlyPeek && snap === 'peek'
+            ? 'pb-[max(0.25rem,env(safe-area-inset-bottom,0px))]'
+            : 'pb-1',
+        )}
         style={{ touchAction: 'none' }}
       >
         <button
