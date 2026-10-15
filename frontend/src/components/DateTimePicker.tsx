@@ -9,6 +9,10 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ] as const
 
+/** Desktop popover: wide enough for calendar + time without clipping. */
+const DESKTOP_W = 520
+const DESKTOP_H = 392
+
 type Props = {
   id?: string
   label: string
@@ -63,72 +67,102 @@ function Chevron({ dir }: { dir: 'up' | 'down' | 'left' | 'right' }) {
 }
 
 const navBtn =
-  'grid min-h-11 min-w-11 cursor-pointer place-items-center rounded-xl border-0 bg-transparent text-muted transition-[background,color,transform] duration-140 ease-out-strong hover:bg-mint/10 hover:text-mist active:scale-[0.94]'
+  'grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted transition-[background,color,transform] duration-140 ease-out-strong hover:bg-mint/10 hover:text-mist active:scale-[0.94]'
 const spinBtn =
-  'grid h-9 w-10 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted transition-[background,color,transform] duration-140 ease-out-strong hover:bg-mint/10 hover:text-mist active:scale-[0.94]'
+  'grid h-6 w-7 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted transition-[background,color,transform] duration-140 ease-out-strong hover:bg-mint/10 hover:text-mist active:scale-[0.94]'
 
 export default function DateTimePicker({ id, label, value, onChange }: Props) {
   const labelId = useId()
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
-  const [anchor, setAnchor] = useState<{ top: number; left: number; width: number } | null>(null)
+  const [draft, setDraft] = useState(value)
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null)
   const isMobile = useMediaQuery(MOBILE_MQ)
-  const selected = useMemo(() => parseLocal(value), [value])
+  const selected = useMemo(() => parseLocal(open ? draft : value), [open, draft, value])
   const [view, setView] = useState(() => startOfMonth(selected))
 
   function measure() {
     const el = triggerRef.current
     if (!el) return
     const r = el.getBoundingClientRect()
-    const width = Math.min(Math.max(r.width, 340), 440)
+    const pad = 16
+    // Prefer aligning to the trigger; if it would clip, slide fully into the viewport.
     let left = r.left
-    if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12
-    if (left < 12) left = 12
-    // Keep panel in viewport vertically when possible
-    let top = r.bottom + 8
-    const estH = 360
-    if (top + estH > window.innerHeight - 12) {
-      top = Math.max(12, r.top - estH - 8)
+    if (left + DESKTOP_W > window.innerWidth - pad) {
+      left = window.innerWidth - DESKTOP_W - pad
     }
-    setAnchor({ top, left, width })
+    if (left < pad) left = pad
+
+    let top = r.bottom + 8
+    if (top + DESKTOP_H > window.innerHeight - pad) {
+      top = Math.max(pad, r.top - DESKTOP_H - 8)
+    }
+    setAnchor({ top, left })
+  }
+
+  function closeDiscard() {
+    setOpen(false)
+    setDraft(value)
+  }
+
+  function closeSave() {
+    onChange(draft)
+    setOpen(false)
+  }
+
+  function openPicker() {
+    setDraft(value)
+    setView(startOfMonth(parseLocal(value)))
+    setOpen(true)
   }
 
   useEffect(() => {
-    if (!open) return
+    if (!open || isMobile) return
     measure()
-    setView(startOfMonth(selected))
-    const onScroll = () => measure()
-    window.addEventListener('resize', onScroll)
-    // Only re-anchor on window scroll — sheet transform no longer traps the portal
-    window.addEventListener('scroll', onScroll, true)
+    const onResize = () => measure()
+    window.addEventListener('resize', onResize)
+    window.addEventListener('scroll', onResize, true)
     return () => {
-      window.removeEventListener('resize', onScroll)
-      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('scroll', onResize, true)
     }
-  }, [open, selected])
+  }, [open, isMobile])
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      delete document.body.dataset.pickerOpen
+      return
+    }
+    document.body.dataset.pickerOpen = '1'
+
+    function isInsidePicker(t: EventTarget | null) {
+      if (!(t instanceof Node)) return false
+      if (triggerRef.current?.contains(t)) return true
+      if (panelRef.current?.contains(t)) return true
+      const el = t instanceof Element ? t : t.parentElement
+      return !!el?.closest?.('[data-picker-panel]')
+    }
+
     function onPointer(e: PointerEvent) {
-      const t = e.target as Node
-      if (triggerRef.current?.contains(t)) return
-      if (panelRef.current?.contains(t)) return
-      setOpen(false)
+      if (isInsidePicker(e.target)) return
+      closeDiscard()
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') closeDiscard()
     }
-    // pointerdown works for touch + mouse; capture so sheet handlers don’t steal first
-    document.addEventListener('pointerdown', onPointer, true)
+
+    document.addEventListener('pointerdown', onPointer)
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
     if (isMobile) document.body.style.overflow = 'hidden'
     return () => {
-      document.removeEventListener('pointerdown', onPointer, true)
+      document.removeEventListener('pointerdown', onPointer)
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
+      delete document.body.dataset.pickerOpen
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isMobile])
 
   const cells = useMemo(() => {
@@ -155,16 +189,24 @@ export default function DateTimePicker({ id, label, value, onChange }: Props) {
   }, [view])
 
   function commitDate(day: Date) {
-    const next = new Date(selected)
-    next.setFullYear(day.getFullYear(), day.getMonth(), day.getDate())
-    onChange(toLocalValue(next))
+    setDraft(prev => {
+      const base = parseLocal(prev)
+      const next = new Date(base)
+      next.setFullYear(day.getFullYear(), day.getMonth(), day.getDate())
+      return toLocalValue(next)
+    })
+    if (day.getMonth() !== view.getMonth() || day.getFullYear() !== view.getFullYear()) {
+      setView(startOfMonth(day))
+    }
   }
 
   function commitTime(partial: { hours?: number; minutes?: number }) {
-    const next = new Date(selected)
-    if (partial.hours != null) next.setHours(partial.hours)
-    if (partial.minutes != null) next.setMinutes(partial.minutes)
-    onChange(toLocalValue(next))
+    setDraft(prev => {
+      const next = parseLocal(prev)
+      if (partial.hours != null) next.setHours(partial.hours)
+      if (partial.minutes != null) next.setMinutes(partial.minutes)
+      return toLocalValue(next)
+    })
   }
 
   const hour24 = selected.getHours()
@@ -184,19 +226,23 @@ export default function DateTimePicker({ id, label, value, onChange }: Props) {
     <div
       className={cn(
         'fixed inset-0 z-[80]',
-        isMobile && 'flex items-end justify-center sm:items-center',
+        isMobile && 'flex items-end justify-center',
       )}
       data-no-drag
+      data-picker-root
     >
-      {/* Backdrop — dims map/sheet so the picker is usable on phone */}
       <button
         type="button"
+        tabIndex={-1}
         className={cn(
           'absolute inset-0 cursor-default border-0',
-          isMobile ? 'bg-ink/72 backdrop-blur-[2px]' : 'bg-ink/35',
+          isMobile ? 'bg-ink/72 backdrop-blur-[2px]' : 'bg-transparent',
         )}
         aria-label="Close calendar"
-        onClick={() => setOpen(false)}
+        onPointerDown={e => {
+          e.preventDefault()
+          closeDiscard()
+        }}
       />
 
       <div
@@ -204,13 +250,14 @@ export default function DateTimePicker({ id, label, value, onChange }: Props) {
         role="dialog"
         aria-label="Choose departure"
         data-no-drag
+        data-picker-panel
         className={cn(
-          'z-[1] grid animate-pop overflow-hidden border border-line bg-ink-soft',
+          'z-[1] animate-pop border border-line bg-ink-soft',
           'shadow-[0_24px_56px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(197,225,229,0.08)]',
-          'bg-[linear-gradient(180deg,rgba(197,225,229,0.04)_0%,transparent_120px),var(--color-ink-soft)]',
+          'bg-[linear-gradient(180deg,rgba(197,225,229,0.04)_0%,transparent_80px),var(--color-ink-soft)]',
           isMobile
-            ? 'relative max-h-[min(92dvh,720px)] w-full max-w-lg grid-cols-1 overflow-y-auto rounded-t-[22px] border-b-0 pb-[env(safe-area-inset-bottom,0px)]'
-            : 'fixed grid-cols-[1.15fr_0.85fr] rounded-2xl',
+            ? 'relative flex w-full max-w-lg flex-col overflow-hidden rounded-t-[20px] border-b-0 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))]'
+            : 'fixed flex flex-col overflow-hidden rounded-2xl',
         )}
         style={
           isMobile
@@ -218,178 +265,230 @@ export default function DateTimePicker({ id, label, value, onChange }: Props) {
             : {
                 top: anchor!.top,
                 left: anchor!.left,
-                width: anchor!.width,
+                width: DESKTOP_W,
               }
         }
         onPointerDown={e => e.stopPropagation()}
       >
-        {/* Mobile grab cue */}
-        {isMobile && (
-          <div className="flex justify-center pt-2.5 pb-1" aria-hidden>
-            <span className="h-1 w-10 rounded-full bg-mint/35" />
-          </div>
-        )}
-
+        {/* Header */}
         <div
           className={cn(
-            'border-line px-3.5 pb-3',
-            isMobile ? 'border-b pt-1' : 'border-r px-3.5 pb-3 pt-3.5',
-            !isMobile && 'pt-3.5',
+            'flex shrink-0 items-center gap-2 border-b border-line',
+            isMobile ? 'min-h-10 px-3 py-1' : 'min-h-12 px-3.5 py-2',
           )}
         >
-          <div className="mb-2.5 grid grid-cols-[44px_1fr_44px] items-center gap-1">
-            <button
-              type="button"
-              className={navBtn}
-              aria-label="Previous month"
-              onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}
-            >
-              <Chevron dir="left" />
-            </button>
-            <p className="m-0 flex items-baseline justify-center gap-2 text-[13px] font-semibold tracking-tight text-mist">
-              <span>{MONTHS[view.getMonth()]}</span>
-              <span className="font-normal text-muted/60" aria-hidden>|</span>
-              <span className="text-muted">{view.getFullYear()}</span>
-            </p>
-            <button
-              type="button"
-              className={navBtn}
-              aria-label="Next month"
-              onClick={() => setView(new Date(view.getFullYear(), view.getMonth() + 1, 1))}
-            >
-              <Chevron dir="right" />
-            </button>
-          </div>
-
-          <div className="mb-1 grid grid-cols-7" aria-hidden>
-            {WEEKDAYS.map(d => (
-              <span key={d} className="py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-muted">
-                {d}
-              </span>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-7 gap-0.5" role="grid">
-            {cells.map(({ date, inMonth }) => {
-              const selectedDay = sameDay(date, selected)
-              const isToday = sameDay(date, today)
-              return (
-                <button
-                  key={`${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${inMonth ? 'm' : 'x'}`}
-                  type="button"
-                  role="gridcell"
-                  aria-selected={selectedDay}
-                  className={cn(
-                    'aspect-square min-h-10 cursor-pointer rounded-full border-0 bg-transparent font-sans text-xs font-medium text-mist transition-[background,color,transform] duration-140 ease-out-strong active:scale-[0.92] hover:bg-mint/10',
-                    !inMonth && 'text-muted/35',
-                    isToday && !selectedDay && 'shadow-[inset_0_0_0_1px_rgba(197,225,229,0.35)]',
-                    selectedDay && 'bg-mint font-semibold text-ink hover:bg-mint-soft',
-                  )}
-                  onClick={() => commitDate(date)}
-                >
-                  {date.getDate()}
-                </button>
-              )
-            })}
-          </div>
-
-          <div className="mt-2 flex justify-end">
-            <button
-              type="button"
-              className="min-h-11 cursor-pointer border-0 bg-transparent px-2 py-1.5 font-sans text-xs font-semibold text-mint transition-[opacity,transform] duration-140 ease-out-strong active:scale-[0.97] active:opacity-80"
-              onClick={() => {
-                const n = new Date()
-                n.setMinutes(n.getMinutes() + 60)
-                n.setSeconds(0, 0)
-                onChange(toLocalValue(n))
-                setView(startOfMonth(n))
-              }}
-            >
-              Today
-            </button>
-          </div>
-        </div>
-
-        <div
-          className={cn(
-            'flex flex-col gap-3 bg-surface/40 px-3.5 pb-3.5',
-            isMobile ? 'pt-3' : 'pt-3.5',
-          )}
-          aria-label="Time"
-        >
-          <p className="m-0 text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">Time</p>
-          <div className="flex items-center justify-center gap-1.5">
-            <div className="flex flex-col items-center gap-0.5">
-              <button type="button" className={spinBtn} aria-label="Hour up" onClick={() => setHour12(hour12 === 12 ? 1 : hour12 + 1, isPm)}>
-                <Chevron dir="up" />
-              </button>
-              <span className="min-w-10 text-center text-[28px] font-semibold tabular-nums tracking-tighter leading-tight text-mist">
-                {pad(hour12)}
-              </span>
-              <button type="button" className={spinBtn} aria-label="Hour down" onClick={() => setHour12(hour12 === 1 ? 12 : hour12 - 1, isPm)}>
-                <Chevron dir="down" />
-              </button>
-            </div>
-            <span className="-mt-1 text-2xl font-medium text-muted" aria-hidden>:</span>
-            <div className="flex flex-col items-center gap-0.5">
-              <button type="button" className={spinBtn} aria-label="Minute up" onClick={() => commitTime({ minutes: (minute + 5) % 60 })}>
-                <Chevron dir="up" />
-              </button>
-              <span className="min-w-10 text-center text-[28px] font-semibold tabular-nums tracking-tighter leading-tight text-mist">
-                {pad(minute)}
-              </span>
-              <button type="button" className={spinBtn} aria-label="Minute down" onClick={() => commitTime({ minutes: (minute + 55) % 60 })}>
-                <Chevron dir="down" />
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-0.5 rounded-xl border border-line bg-ink/55 p-0.5">
-            <button
-              type="button"
-              className={cn(
-                'min-h-11 cursor-pointer rounded-[10px] border-0 bg-transparent py-2 font-sans text-xs font-semibold transition-[color,background,transform] duration-150 ease-out-strong active:scale-[0.97]',
-                !isPm ? 'bg-mint/16 text-mist shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' : 'text-muted',
-              )}
-              onClick={() => setHour12(hour12, false)}
-            >
-              AM
-            </button>
-            <button
-              type="button"
-              className={cn(
-                'min-h-11 cursor-pointer rounded-[10px] border-0 bg-transparent py-2 font-sans text-xs font-semibold transition-[color,background,transform] duration-150 ease-out-strong active:scale-[0.97]',
-                isPm ? 'bg-mint/16 text-mist shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]' : 'text-muted',
-              )}
-              onClick={() => setHour12(hour12, true)}
-            >
-              PM
-            </button>
-          </div>
-
-          <div className="grid grid-cols-4 gap-1.5" role="group" aria-label="Minutes">
-            {[0, 15, 30, 45].map(m => (
-              <button
-                key={m}
-                type="button"
-                className={cn(
-                  'min-h-11 cursor-pointer rounded-xl border border-line bg-transparent py-2 font-sans text-[11px] font-semibold tabular-nums transition-[background,color,border-color,transform] duration-140 ease-out-strong active:scale-[0.96]',
-                  minute === m ? 'border-mint/35 bg-teal/30 text-mist' : 'text-muted hover:border-line-strong hover:text-mist',
-                )}
-                onClick={() => commitTime({ minutes: m })}
-              >
-                :{pad(m)}
-              </button>
-            ))}
-          </div>
-
           <button
             type="button"
-            className="mt-auto min-h-11 w-full cursor-pointer rounded-xl border-0 bg-[linear-gradient(180deg,var(--color-mint-soft)_0%,var(--color-mint)_100%)] px-4 py-2.5 font-sans text-sm font-semibold tracking-tight text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_1px_0_rgba(0,0,0,0.12)] transition-[transform,filter] duration-140 ease-out-strong hover:brightness-[1.03] active:scale-[0.97]"
-            onClick={() => setOpen(false)}
+            className="grid h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-lg border-0 bg-transparent text-muted transition-[background,color,transform] duration-140 ease-out-strong hover:bg-mint/10 hover:text-mist active:scale-[0.94]"
+            aria-label="Close"
+            onPointerDown={e => e.stopPropagation()}
+            onClick={closeDiscard}
           >
-            Done
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <path d="M4 4l8 8M12 4L4 12" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
           </button>
+          <div className="min-w-0 flex-1">
+            <p className="m-0 text-[13px] font-semibold tracking-tight text-mist">{label}</p>
+            <p className="m-0 truncate text-[11px] tabular-nums text-muted">{formatTrigger(selected)}</p>
+          </div>
+          <button
+            type="button"
+            className="cursor-pointer border-0 bg-transparent px-2 py-1.5 font-sans text-xs font-semibold text-mint transition-[opacity,transform] duration-140 ease-out-strong active:scale-[0.97]"
+            onPointerDown={e => e.stopPropagation()}
+            onClick={() => {
+              const n = new Date()
+              n.setMinutes(n.getMinutes() + 60)
+              n.setSeconds(0, 0)
+              setDraft(toLocalValue(n))
+              setView(startOfMonth(n))
+            }}
+          >
+            Today
+          </button>
+        </div>
+
+        {/* Body: stacked on mobile, side-by-side on desktop */}
+        <div
+          className={cn(
+            'min-h-0',
+            isMobile ? 'flex flex-col' : 'grid grid-cols-[1fr_200px]',
+          )}
+        >
+          <div
+            className={cn(
+              'border-line',
+              isMobile ? 'border-b px-2.5 pb-1.5 pt-1' : 'border-r px-3.5 pb-3.5 pt-3',
+            )}
+          >
+            <div className={cn('mb-1.5 grid grid-cols-[32px_1fr_32px] items-center', isMobile && 'mb-0.5')}>
+              <button
+                type="button"
+                className={navBtn}
+                aria-label="Previous month"
+                onClick={() => setView(new Date(view.getFullYear(), view.getMonth() - 1, 1))}
+              >
+                <Chevron dir="left" />
+              </button>
+              <p className="m-0 flex items-baseline justify-center gap-1.5 text-[13px] font-semibold tracking-tight text-mist">
+                <span>{MONTHS[view.getMonth()].slice(0, isMobile ? 3 : undefined)}</span>
+                <span className="font-normal text-muted/60" aria-hidden>|</span>
+                <span className="text-muted">{view.getFullYear()}</span>
+              </p>
+              <button
+                type="button"
+                className={navBtn}
+                aria-label="Next month"
+                onClick={() => setView(new Date(view.getFullYear(), view.getMonth() + 1, 1))}
+              >
+                <Chevron dir="right" />
+              </button>
+            </div>
+
+            <div className="mb-0.5 grid grid-cols-7" aria-hidden>
+              {WEEKDAYS.map(d => (
+                <span
+                  key={d}
+                  className={cn(
+                    'text-center font-semibold uppercase tracking-wide text-muted',
+                    isMobile ? 'py-0 text-[9px] leading-4' : 'py-1 text-[10px]',
+                  )}
+                >
+                  {d}
+                </span>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-7 gap-0.5" role="grid">
+              {cells.map(({ date, inMonth }) => {
+                const selectedDay = sameDay(date, selected)
+                const isToday = sameDay(date, today)
+                return (
+                  <button
+                    key={`${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${inMonth ? 'm' : 'x'}`}
+                    type="button"
+                    role="gridcell"
+                    aria-selected={selectedDay}
+                    className={cn(
+                      'mx-auto flex w-full max-w-10 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent font-sans font-medium text-mist transition-[background,color,transform] duration-140 ease-out-strong active:scale-[0.92] hover:bg-mint/10',
+                      isMobile ? 'h-7 text-[11px]' : 'h-9 text-xs',
+                      !inMonth && 'text-muted/35',
+                      isToday && !selectedDay && 'shadow-[inset_0_0_0_1px_rgba(197,225,229,0.35)]',
+                      selectedDay && 'bg-mint font-semibold text-ink hover:bg-mint-soft',
+                    )}
+                    onPointerDown={e => {
+                      e.stopPropagation()
+                      commitDate(date)
+                    }}
+                  >
+                    {date.getDate()}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div
+            className={cn(
+              'flex flex-col bg-surface/40',
+              isMobile ? 'gap-1.5 px-2.5 pb-2 pt-1.5' : 'gap-3 px-3 py-3',
+            )}
+            aria-label="Time"
+          >
+            <p className="m-0 text-[10px] font-semibold uppercase tracking-[0.04em] text-muted">
+              Time
+            </p>
+
+            <div className="flex flex-1 flex-col items-center justify-center gap-2">
+              <div className="flex items-center justify-center gap-1">
+                <div className="flex flex-col items-center">
+                  <button type="button" className={spinBtn} aria-label="Hour up" onClick={() => setHour12(hour12 === 12 ? 1 : hour12 + 1, isPm)}>
+                    <Chevron dir="up" />
+                  </button>
+                  <span className={cn('min-w-9 text-center font-semibold tabular-nums tracking-tighter text-mist', isMobile ? 'text-[20px] leading-none' : 'text-[26px] leading-tight')}>
+                    {pad(hour12)}
+                  </span>
+                  <button type="button" className={spinBtn} aria-label="Hour down" onClick={() => setHour12(hour12 === 1 ? 12 : hour12 - 1, isPm)}>
+                    <Chevron dir="down" />
+                  </button>
+                </div>
+                <span className={cn('font-medium text-muted', isMobile ? 'text-lg' : 'text-2xl')} aria-hidden>:</span>
+                <div className="flex flex-col items-center">
+                  <button type="button" className={spinBtn} aria-label="Minute up" onClick={() => commitTime({ minutes: (minute + 5) % 60 })}>
+                    <Chevron dir="up" />
+                  </button>
+                  <span className={cn('min-w-9 text-center font-semibold tabular-nums tracking-tighter text-mist', isMobile ? 'text-[20px] leading-none' : 'text-[26px] leading-tight')}>
+                    {pad(minute)}
+                  </span>
+                  <button type="button" className={spinBtn} aria-label="Minute down" onClick={() => commitTime({ minutes: (minute + 55) % 60 })}>
+                    <Chevron dir="down" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid w-full max-w-[140px] grid-cols-2 gap-1 rounded-lg border border-line bg-ink/55 p-0.5">
+                <button
+                  type="button"
+                  className={cn(
+                    'cursor-pointer rounded-md border-0 bg-transparent py-1.5 font-sans text-[11px] font-semibold transition-[color,background,transform] duration-150 ease-out-strong active:scale-[0.97]',
+                    !isPm ? 'bg-mint/16 text-mist' : 'text-muted',
+                  )}
+                  onClick={() => setHour12(hour12, false)}
+                >
+                  AM
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    'cursor-pointer rounded-md border-0 bg-transparent py-1.5 font-sans text-[11px] font-semibold transition-[color,background,transform] duration-150 ease-out-strong active:scale-[0.97]',
+                    isPm ? 'bg-mint/16 text-mist' : 'text-muted',
+                  )}
+                  onClick={() => setHour12(hour12, true)}
+                >
+                  PM
+                </button>
+              </div>
+            </div>
+
+            <div className={cn('grid gap-1', isMobile ? 'grid-cols-4' : 'grid-cols-2')} role="group" aria-label="Minutes">
+              {[0, 15, 30, 45].map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  className={cn(
+                    'cursor-pointer rounded-lg border border-line bg-transparent font-sans text-[11px] font-semibold tabular-nums transition-[background,color,border-color,transform] duration-140 ease-out-strong active:scale-[0.96]',
+                    isMobile ? 'min-h-8 py-1' : 'min-h-9 py-1.5',
+                    minute === m ? 'border-mint/35 bg-teal/30 text-mist' : 'text-muted hover:border-line-strong hover:text-mist',
+                  )}
+                  onClick={() => commitTime({ minutes: m })}
+                >
+                  :{pad(m)}
+                </button>
+              ))}
+            </div>
+
+            <div className={cn('grid gap-2', isMobile ? 'grid-cols-[1fr_1.4fr] pt-0.5' : 'grid-cols-1 pt-1')}>
+              {isMobile && (
+                <button
+                  type="button"
+                  className="min-h-9 w-full cursor-pointer rounded-xl border border-line bg-transparent px-3 py-1.5 font-sans text-sm font-semibold tracking-tight text-mist transition-[transform,background] duration-140 ease-out-strong hover:bg-mint/8 active:scale-[0.97]"
+                  onClick={closeDiscard}
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                type="button"
+                className={cn(
+                  'w-full cursor-pointer rounded-xl border-0 bg-[linear-gradient(180deg,var(--color-mint-soft)_0%,var(--color-mint)_100%)] px-4 font-sans text-sm font-semibold tracking-tight text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_1px_0_rgba(0,0,0,0.12)] transition-[transform,filter] duration-140 ease-out-strong hover:brightness-[1.03] active:scale-[0.97]',
+                  isMobile ? 'min-h-9 py-1.5' : 'min-h-10 py-2',
+                )}
+                onClick={closeSave}
+              >
+                Done
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -412,9 +511,13 @@ export default function DateTimePicker({ id, label, value, onChange }: Props) {
         aria-expanded={open}
         aria-labelledby={labelId}
         data-no-drag
-        onClick={() => setOpen(o => !o)}
+        data-picker-trigger
+        onClick={() => {
+          if (open) closeDiscard()
+          else openPicker()
+        }}
       >
-        <span className="tabular-nums">{formatTrigger(selected)}</span>
+        <span className="tabular-nums">{formatTrigger(parseLocal(value))}</span>
         <svg className="shrink-0 text-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
           <rect x="3" y="5" width="18" height="16" rx="3" stroke="currentColor" strokeWidth="1.75" />
           <path d="M3 9h18M8 3v4M16 3v4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />

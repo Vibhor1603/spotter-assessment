@@ -113,6 +113,7 @@ function cpsCollection(data: PlanResponse, sel: string | null) {
           routeId: r.id,
           rank: ranks.get(r.id) ?? 0,
           color: RISK_COLORS[c.risk],
+          riskLevel: c.risk_level,
           selected: r.id === selected ? 1 : 0,
           payload: JSON.stringify(c),
         },
@@ -187,6 +188,126 @@ function truckCollection(
 
 function emptyFC() {
   return { type: 'FeatureCollection' as const, features: [] as never[] }
+}
+
+/** Soft glass-disk marker (Apple Maps–style) drawn to canvas for MapLibre images. */
+function drawSoftDisk(opts: {
+  size: number
+  fill: string
+  ring?: string
+  ringWidth?: number
+  glow?: string
+  glyph?: 'start' | 'end'
+}): HTMLCanvasElement {
+  const dpr = 2
+  const size = opts.size * dpr
+  const c = document.createElement('canvas')
+  c.width = size
+  c.height = size
+  const ctx = c.getContext('2d')!
+  const cx = size / 2
+  const cy = size / 2
+  const coreR = size * 0.26
+
+  // Ambient glow
+  if (opts.glow) {
+    const g = ctx.createRadialGradient(cx, cy, coreR * 0.35, cx, cy, size * 0.48)
+    g.addColorStop(0, opts.glow)
+    g.addColorStop(0.5, 'rgba(197,225,229,0.14)')
+    g.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = g
+    ctx.fillRect(0, 0, size, size)
+  }
+
+  // Soft contact shadow
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(cx, cy + dpr, coreR * 1.05, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'
+  ctx.filter = `blur(${2.4 * dpr}px)`
+  ctx.fill()
+  ctx.restore()
+
+  // Core disk
+  ctx.beginPath()
+  ctx.arc(cx, cy, coreR, 0, Math.PI * 2)
+  ctx.fillStyle = opts.fill
+  ctx.fill()
+
+  // Specular (glass highlight)
+  const hi = ctx.createRadialGradient(
+    cx - coreR * 0.35, cy - coreR * 0.4, 0,
+    cx, cy, coreR,
+  )
+  hi.addColorStop(0, 'rgba(255,255,255,0.62)')
+  hi.addColorStop(0.4, 'rgba(255,255,255,0.12)')
+  hi.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.beginPath()
+  ctx.arc(cx, cy, coreR, 0, Math.PI * 2)
+  ctx.fillStyle = hi
+  ctx.fill()
+
+  // Crisp ring
+  if (opts.ring) {
+    ctx.beginPath()
+    ctx.arc(cx, cy, coreR - (opts.ringWidth ?? 1.5) * dpr * 0.35, 0, Math.PI * 2)
+    ctx.strokeStyle = opts.ring
+    ctx.lineWidth = (opts.ringWidth ?? 1.75) * dpr
+    ctx.stroke()
+  }
+
+  // Tiny glyph for start / end
+  if (opts.glyph === 'start') {
+    ctx.fillStyle = 'rgba(6,20,23,0.9)'
+    ctx.beginPath()
+    const s = coreR * 0.42
+    ctx.moveTo(cx - s * 0.35, cy - s)
+    ctx.lineTo(cx - s * 0.35, cy + s)
+    ctx.lineTo(cx + s * 0.85, cy)
+    ctx.closePath()
+    ctx.fill()
+  } else if (opts.glyph === 'end') {
+    ctx.fillStyle = 'rgba(6,20,23,0.88)'
+    const s = coreR * 0.48
+    ctx.fillRect(cx - s * 0.5, cy - s * 0.5, s, s)
+  }
+
+  return c
+}
+
+function ensureMarkerImages(m: MapLibreMapType) {
+  if (!m.hasImage('mk-start')) {
+    const start = drawSoftDisk({
+      size: 36,
+      fill: '#1A9AA3',
+      ring: 'rgba(244,248,248,0.92)',
+      ringWidth: 1.75,
+      glow: 'rgba(26,154,163,0.55)',
+      glyph: 'start',
+    })
+    m.addImage('mk-start', start, { pixelRatio: 2 })
+  }
+  if (!m.hasImage('mk-end')) {
+    const end = drawSoftDisk({
+      size: 36,
+      fill: '#F4F8F8',
+      ring: 'rgba(13,124,130,0.85)',
+      ringWidth: 1.85,
+      glow: 'rgba(244,248,248,0.4)',
+      glyph: 'end',
+    })
+    m.addImage('mk-end', end, { pixelRatio: 2 })
+  }
+  if (!m.hasImage('mk-truck')) {
+    const truck = drawSoftDisk({
+      size: 32,
+      fill: '#C5E1E5',
+      ring: 'rgba(13,124,130,0.9)',
+      ringWidth: 1.6,
+      glow: 'rgba(197,225,229,0.5)',
+    })
+    m.addImage('mk-truck', truck, { pixelRatio: 2 })
+  }
 }
 
 function reduceMotion() {
@@ -294,6 +415,7 @@ export default function RouteMap({
   }, [])
 
   function ensureLayers(m: MapLibreMapType) {
+    ensureMarkerImages(m)
     if (!m.getSource('heat')) {
       m.addSource('heat', { type: 'geojson', data: emptyFC() })
     }
@@ -493,7 +615,18 @@ export default function RouteMap({
       })
     }
 
-    // Invisible fat hit targets (≥44px feel on phone)
+    // Soft glass stops: glow bloom → white ring → risk core. Compact on phone; fat hit targets.
+    const cpGlowSel = mobile ? 11 : 15
+    const cpGlowAlt = mobile ? 8 : 11
+    const cpRingSel = mobile ? 6.5 : 8.5
+    const cpRingAlt = mobile ? 4.5 : 6
+    const cpCoreSel = mobile ? 4.25 : 5.5
+    const cpCoreAlt = mobile ? 3 : 4
+    const endLabel = mobile ? 11 : 13
+    const endOffset = mobile ? 1.7 : 2.05
+    const iconSize = mobile ? 0.72 : 0.92
+    const truckIcon = mobile ? 0.62 : 0.78
+
     if (!m.getLayer('cps-hit')) {
       m.addLayer({
         id: 'cps-hit',
@@ -502,14 +635,84 @@ export default function RouteMap({
         paint: {
           'circle-radius': [
             'interpolate', ['linear'], ['zoom'],
-            4, mobile ? 22 : 16,
-            8, mobile ? 28 : 22,
-            12, mobile ? 34 : 28,
+            4, mobile ? 18 : 16,
+            8, mobile ? 22 : 22,
+            12, mobile ? 26 : 28,
           ],
           'circle-color': '#fff',
           'circle-opacity': 0,
         },
       })
+    } else {
+      m.setPaintProperty('cps-hit', 'circle-radius', [
+        'interpolate', ['linear'], ['zoom'],
+        4, mobile ? 18 : 16,
+        8, mobile ? 22 : 22,
+        12, mobile ? 26 : 28,
+      ])
+    }
+
+    // Soft color bloom under each stop
+    if (!m.getLayer('cps-glow')) {
+      m.addLayer({
+        id: 'cps-glow',
+        type: 'circle',
+        source: 'cps',
+        paint: {
+          'circle-radius': [
+            'case',
+            ['==', ['get', 'selected'], 1],
+            ['+', cpGlowSel, ['*', ['coalesce', ['get', 'riskLevel'], 0], 1.1]],
+            ['+', cpGlowAlt, ['*', ['coalesce', ['get', 'riskLevel'], 0], 0.7]],
+          ],
+          'circle-color': ['get', 'color'],
+          'circle-opacity': [
+            'case',
+            ['==', ['get', 'selected'], 1], 0.38,
+            0.16,
+          ],
+          'circle-blur': 0.85,
+        },
+      })
+    } else {
+      m.setPaintProperty('cps-glow', 'circle-radius', [
+        'case',
+        ['==', ['get', 'selected'], 1],
+        ['+', cpGlowSel, ['*', ['coalesce', ['get', 'riskLevel'], 0], 1.1]],
+        ['+', cpGlowAlt, ['*', ['coalesce', ['get', 'riskLevel'], 0], 0.7]],
+      ])
+    }
+
+    // Crisp mist ring (Apple-style edge)
+    if (!m.getLayer('cps-ring')) {
+      m.addLayer({
+        id: 'cps-ring',
+        type: 'circle',
+        source: 'cps',
+        paint: {
+          'circle-radius': [
+            'case',
+            ['==', ['get', 'selected'], 1], cpRingSel,
+            cpRingAlt,
+          ],
+          'circle-color': '#ffffff',
+          'circle-opacity': 0,
+          'circle-stroke-color': 'rgba(244,248,248,0.92)',
+          'circle-stroke-width': mobile ? 1.5 : 2,
+          'circle-stroke-opacity': [
+            'case',
+            ['==', ['get', 'selected'], 1], 0.95,
+            0.45,
+          ],
+        },
+      })
+    } else {
+      m.setPaintProperty('cps-ring', 'circle-radius', [
+        'case',
+        ['==', ['get', 'selected'], 1], cpRingSel,
+        cpRingAlt,
+      ])
+      m.setPaintProperty('cps-ring', 'circle-stroke-width', mobile ? 1.5 : 2)
     }
 
     if (!m.getLayer('cps')) {
@@ -520,77 +723,58 @@ export default function RouteMap({
         paint: {
           'circle-radius': [
             'case',
-            ['==', ['get', 'selected'], 1], mobile ? 12 : 10,
-            mobile ? 9 : 7,
+            ['==', ['get', 'selected'], 1],
+            ['+', cpCoreSel, ['*', ['min', ['coalesce', ['get', 'riskLevel'], 0], 3], 0.45]],
+            cpCoreAlt,
           ],
           'circle-color': ['get', 'color'],
-          'circle-stroke-color': '#fafbfa',
-          'circle-stroke-width': 2,
           'circle-opacity': [
             'case',
             ['==', ['get', 'selected'], 1], 1,
-            0.4,
+            0.42,
           ],
-        },
-      })
-    }
-
-    if (!m.getLayer('ends-halo')) {
-      m.addLayer({
-        id: 'ends-halo',
-        type: 'circle',
-        source: 'ends',
-        paint: {
-          'circle-radius': 22,
-          'circle-color': [
-            'match', ['get', 'kind'],
-            'start', 'rgba(26,154,163,0.45)',
-            'rgba(244,248,248,0.35)',
-          ],
+          'circle-blur': 0.05,
           'circle-stroke-width': 0,
         },
       })
     } else {
-      m.setPaintProperty('ends-halo', 'circle-radius', 22)
+      m.setPaintProperty('cps', 'circle-radius', [
+        'case',
+        ['==', ['get', 'selected'], 1],
+        ['+', cpCoreSel, ['*', ['min', ['coalesce', ['get', 'riskLevel'], 0], 3], 0.45]],
+        cpCoreAlt,
+      ])
+      m.setPaintProperty('cps', 'circle-blur', 0.05)
+      m.setPaintProperty('cps', 'circle-stroke-width', 0)
     }
 
+    // Migrate legacy circle markers → symbol icons
+    if (m.getLayer('ends-halo')) m.removeLayer('ends-halo')
+    if (m.getLayer('ends-label')) m.removeLayer('ends-label')
+    const endsLayer = m.getLayer('ends')
+    if (endsLayer && endsLayer.type !== 'symbol') m.removeLayer('ends')
+    const truckLayer = m.getLayer('truck')
+    if (truckLayer && truckLayer.type !== 'symbol') m.removeLayer('truck')
+
+    // Start / End — custom glass icons + label
     if (!m.getLayer('ends')) {
       m.addLayer({
         id: 'ends',
-        type: 'circle',
-        source: 'ends',
-        paint: {
-          'circle-radius': 12,
-          'circle-color': [
-            'match', ['get', 'kind'],
-            'start', '#1A9AA3',
-            '#F4F8F8',
-          ],
-          'circle-stroke-color': '#061417',
-          'circle-stroke-width': 3,
-          'circle-stroke-opacity': 1,
-        },
-      })
-    } else {
-      m.setPaintProperty('ends', 'circle-radius', 12)
-      m.setPaintProperty('ends', 'circle-stroke-width', 3)
-      m.setPaintProperty('ends', 'circle-color', [
-        'match', ['get', 'kind'],
-        'start', '#1A9AA3',
-        '#F4F8F8',
-      ])
-    }
-
-    if (!m.getLayer('ends-label')) {
-      m.addLayer({
-        id: 'ends-label',
         type: 'symbol',
         source: 'ends',
         layout: {
+          'icon-image': [
+            'match', ['get', 'kind'],
+            'start', 'mk-start',
+            'mk-end',
+          ],
+          'icon-size': iconSize,
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
           'text-field': ['get', 'label'],
           'text-font': pickLabelFont(m),
-          'text-size': 14,
-          'text-offset': [0, 1.85],
+          'text-size': endLabel,
+          'text-offset': [0, endOffset],
           'text-anchor': 'top',
           'text-letter-spacing': 0.02,
           'text-max-width': 8,
@@ -601,19 +785,16 @@ export default function RouteMap({
         paint: {
           'text-color': '#FFFFFF',
           'text-halo-color': 'rgba(6,20,23,0.95)',
-          'text-halo-width': 2.4,
-          'text-halo-blur': 0.4,
-          'text-opacity': 1,
+          'text-halo-width': mobile ? 1.6 : 2.2,
+          'text-halo-blur': 0.35,
+          'icon-opacity': 1,
         },
       })
     } else {
-      m.setLayoutProperty('ends-label', 'text-size', 14)
-      m.setLayoutProperty('ends-label', 'text-allow-overlap', true)
-      m.setLayoutProperty('ends-label', 'text-ignore-placement', true)
-      m.setPaintProperty('ends-label', 'text-color', '#FFFFFF')
-      m.setPaintProperty('ends-label', 'text-halo-color', 'rgba(6,20,23,0.95)')
-      m.setPaintProperty('ends-label', 'text-halo-width', 2.4)
-      m.setPaintProperty('ends-label', 'text-halo-blur', 0.4)
+      m.setLayoutProperty('ends', 'icon-size', iconSize)
+      m.setLayoutProperty('ends', 'text-size', endLabel)
+      m.setLayoutProperty('ends', 'text-offset', [0, endOffset])
+      m.setPaintProperty('ends', 'text-halo-width', mobile ? 1.6 : 2.2)
     }
 
     if (!m.getLayer('truck-halo')) {
@@ -622,25 +803,32 @@ export default function RouteMap({
         type: 'circle',
         source: 'truck',
         paint: {
-          'circle-radius': 18,
-          'circle-color': 'rgba(197, 225, 229, 0.28)',
+          'circle-radius': mobile ? 14 : 20,
+          'circle-color': 'rgba(197, 225, 229, 0.32)',
+          'circle-blur': 0.75,
           'circle-stroke-width': 0,
         },
       })
+    } else {
+      m.setPaintProperty('truck-halo', 'circle-radius', mobile ? 14 : 20)
+      m.setPaintProperty('truck-halo', 'circle-blur', 0.75)
     }
 
     if (!m.getLayer('truck')) {
       m.addLayer({
         id: 'truck',
-        type: 'circle',
+        type: 'symbol',
         source: 'truck',
-        paint: {
-          'circle-radius': 9,
-          'circle-color': '#C5E1E5',
-          'circle-stroke-color': '#0D7C82',
-          'circle-stroke-width': 3,
+        layout: {
+          'icon-image': 'mk-truck',
+          'icon-size': truckIcon,
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
         },
+        paint: { 'icon-opacity': 1 },
       })
+    } else {
+      m.setLayoutProperty('truck', 'icon-size', truckIcon)
     }
   }
 
@@ -737,8 +925,8 @@ export default function RouteMap({
       const mobile = window.matchMedia('(max-width: 860px)').matches
       m.fitBounds(b, {
         padding: mobile
-          // Right inset clears the slim forecast rail under zoom controls
-          ? { top: 88, bottom: 96, left: 24, right: 52 }
+          // Bottom clears compact peek (trip + route cards); right clears forecast rail
+          ? { top: 88, bottom: 200, left: 24, right: 52 }
           : { top: 96, bottom: 120, left: 56, right: 56 },
         maxZoom: 8.2,
         duration: reduceMotion() ? 0 : duration,

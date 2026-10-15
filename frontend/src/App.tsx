@@ -239,15 +239,15 @@ export default function App() {
         </header>
       )}
 
-      {/* Mobile: trip chip when sheet is raised (peek is handle-only so the map stays open) */}
-      {data && isMobile && sheetSnap !== 'peek' && (
-        <div data-sheet-chrome className="flex shrink-0 flex-col gap-2">
+      {/* Mobile peek: trip + swipeable routes (map-first, switch without pulling the sheet up) */}
+      {data && isMobile && (
+        <div data-sheet-peek-body data-sheet-chrome className="flex shrink-0 flex-col gap-2 pb-0.5">
           <button
             type="button"
             className={cn(
               'group flex min-h-11 w-full cursor-pointer flex-col gap-0.5 rounded-xl border border-line bg-surface/80 px-3 py-2.5 text-left font-sans',
               'shadow-[inset_0_1px_0_rgba(197,225,229,0.05)]',
-              'transition-[background,border-color,transform] duration-160 ease-out-strong',
+              'transition-[background,border-color,transform,box-shadow] duration-160 ease-out-strong',
               'hover:border-mint/28 hover:bg-surface-2/80 active:scale-[0.985]',
               'focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(13,124,130,0.28)]',
             )}
@@ -266,6 +266,33 @@ export default function App() {
               {shortPlace(originText)} → {shortPlace(destText)}
             </p>
           </button>
+          {sheetSnap === 'peek' && (
+            <div
+              className={cn(
+                'sheet-h-scroll -mx-1 flex gap-2 overflow-x-auto overscroll-x-contain px-1 pb-1',
+                'snap-x snap-mandatory scroll-px-1',
+                stale && 'opacity-55 saturate-70',
+              )}
+              style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+              aria-label="Routes"
+              data-no-drag
+            >
+              {data.routes.map((r, i) => (
+                <RouteCard
+                  key={r.id}
+                  route={r}
+                  rank={i}
+                  recommended={r.id === data.recommended}
+                  selected={r.id === selectedId}
+                  why={undefined}
+                  loadLb={load}
+                  onSelect={() => setSelectedId(r.id)}
+                  compact
+                  className="w-[min(228px,68vw)] shrink-0 snap-start"
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -569,7 +596,6 @@ export default function App() {
           onSnapChange={setSheetSnap}
           onHeightChange={onSheetHeight}
           fitContent={!data && formOpen}
-          handleOnlyPeek={!!data}
           footer={
             formOpen ? (
               <button
@@ -713,14 +739,15 @@ function RouteCard({
     <button
       type="button"
       className={cn(
-        'w-full animate-rise cursor-pointer rounded-xl border border-line bg-transparent text-left font-sans text-inherit transition-[border-color,transform,background] duration-160 ease-out-strong active:scale-[0.985]',
+        'w-full cursor-pointer rounded-xl border border-line bg-transparent text-left font-sans text-inherit transition-[border-color,transform,background,box-shadow] duration-160 ease-out-strong active:scale-[0.985]',
+        !compact && 'animate-rise',
         compact ? 'min-h-11 p-2.5' : 'p-3.5',
         recommended && 'border-[#3d9a7a]/45',
-        selected && 'border-mint/55 bg-surface',
+        selected && 'border-mint/55 bg-surface shadow-[inset_0_1px_0_rgba(197,225,229,0.06)]',
         className,
       )}
       onClick={onSelect}
-      style={{ animationDelay: `${rank * 40}ms` }}
+      style={compact ? undefined : { animationDelay: `${rank * 40}ms` }}
     >
       <div className="mb-2.5 flex items-baseline justify-between gap-2">
         <strong className="text-sm font-semibold tracking-tight">

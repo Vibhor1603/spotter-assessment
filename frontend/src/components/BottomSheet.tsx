@@ -23,8 +23,7 @@ type Props = {
    */
   fitContent?: boolean
   /**
-   * Peek shows only the grab handle (map-first after routes load).
-   * Pull up to half/full for trip details again.
+   * Peek shows only the grab handle (legacy). Prefer measured peek body for results.
    */
   handleOnlyPeek?: boolean
   /** Called whenever the visible sheet height (px) changes — for map overlays. */
@@ -33,8 +32,8 @@ type Props = {
 }
 
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
-const SNAP_MS = 320
-const VELOCITY_FLICK = 0.45 // px/ms
+const SNAP_MS = 380
+const VELOCITY_FLICK = 0.42 // px/ms
 
 function preferReducedMotion() {
   return typeof window !== 'undefined'
@@ -59,16 +58,13 @@ function snapHeights(
   const sb = safeBottom()
   const half = Math.round(vh * 0.55)
   const full = Math.round(Math.min(vh * 0.92, vh - 8))
-  // Handle strip ≈ pt + min-h-11 button + pb. Keep peek map-first when routes show.
-  // Include safe-area so the pill sits above the home indicator (handle grows via CSS).
-  const handleH = 56
+  const handleH = 52
   let peek: number
   if (handleOnlyPeek) {
     peek = Math.round(handleH + sb)
   } else {
-    // Handle + measured peek body (trip + cards), hard-capped so map stays visible
     const peekRaw = Math.round(handleH + sb + Math.max(peekBody, 96))
-    peek = Math.min(peekRaw, Math.round(vh * 0.34), half - 48)
+    peek = Math.min(peekRaw, Math.round(vh * 0.38), half - 40)
     peek = Math.max(peek, 120 + sb)
   }
   return {
@@ -81,12 +77,10 @@ function snapHeights(
 function nearestSnap(height: number, heights: Record<SheetSnap, number>, velocity: number): SheetSnap {
   const ordered: SheetSnap[] = ['peek', 'half', 'full']
   if (velocity < -VELOCITY_FLICK) {
-    // flick up → taller
     const taller = ordered.find(s => heights[s] > height + 8)
     if (taller) return taller
   }
   if (velocity > VELOCITY_FLICK) {
-    // flick down → shorter
     for (let i = ordered.length - 1; i >= 0; i--) {
       if (heights[ordered[i]] < height - 8) return ordered[i]
     }
@@ -112,6 +106,7 @@ export default function BottomSheet({
   onHeightChange, className,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const [vh, setVh] = useState(() => typeof window !== 'undefined' ? window.innerHeight : 800)
   const [peekBody, setPeekBody] = useState(0)
   const [fitH, setFitH] = useState(0)
@@ -134,9 +129,10 @@ export default function BottomSheet({
     moved: boolean
     pointerId: number
   } | null>(null)
+  /** Survives pointerup so handle onClick can ignore a completed drag. */
+  const skipHandleClick = useRef(false)
   const DRAG_THRESHOLD = 8
 
-  // Keep height in sync when snap / fit / viewport changes (not mid-drag)
   useLayoutEffect(() => {
     if (dragging) return
     heightRef.current = restingH
@@ -159,13 +155,13 @@ export default function BottomSheet({
     }
   }, [])
 
-  // Measure only dedicated peek body (trip chip + swipe cards)
-  useEffect(() => {
+  // Measure peek body before paint to avoid height jumps after plan
+  useLayoutEffect(() => {
     const root = rootRef.current
     if (!root) return
     const measure = () => {
       const body = root.querySelector('[data-sheet-peek-body]') as HTMLElement | null
-      setPeekBody(body ? body.offsetHeight : 0)
+      setPeekBody(body ? Math.ceil(body.getBoundingClientRect().height) : 0)
     }
     measure()
     const body = root.querySelector('[data-sheet-peek-body]')
@@ -173,9 +169,8 @@ export default function BottomSheet({
     const ro = new ResizeObserver(measure)
     ro.observe(body)
     return () => ro.disconnect()
-  }, [children])
+  }, [children, snap])
 
-  // Measure natural content height for fit-to-content planning mode
   useLayoutEffect(() => {
     if (!fitContent) {
       setFitH(0)
@@ -185,7 +180,7 @@ export default function BottomSheet({
     if (!root) return
     const measure = () => {
       const handle = root.querySelector('[data-sheet-handle]') as HTMLElement | null
-      const scroll = root.querySelector('[data-sheet-scroll]') as HTMLElement | null
+      const scroll = scrollRef.current
       const foot = root.querySelector('[data-sheet-footer]') as HTMLElement | null
       const sb = safeBottom()
       const next = (handle?.offsetHeight ?? 44)
@@ -197,12 +192,20 @@ export default function BottomSheet({
     }
     measure()
     const ro = new ResizeObserver(measure)
-    const scroll = root.querySelector('[data-sheet-scroll]')
+    if (scrollRef.current) ro.observe(scrollRef.current)
     const foot = root.querySelector('[data-sheet-footer]')
-    if (scroll) ro.observe(scroll)
     if (foot) ro.observe(foot)
     return () => ro.disconnect()
   }, [fitContent, children, footer])
+
+  // Peek: lock scroll so the strip feels like a solid HUD, not a nested scroller
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (snap === 'peek' && !fitContent) {
+      el.scrollTop = 0
+    }
+  }, [snap, fitContent])
 
   const commitSnap = useCallback((next: SheetSnap) => {
     onSnapChange(next)
@@ -215,19 +218,26 @@ export default function BottomSheet({
     const h = snapHeights(window.innerHeight, peekBody, handleOnlyPeek)[next]
     heightRef.current = h
     setHeight(h)
+    if (next === 'peek' && scrollRef.current) {
+      scrollRef.current.scrollTop = 0
+    }
   }, [onSnapChange, peekBody, fitContent, fitH, maxH, handleOnlyPeek])
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (e.button !== 0) return
+    // Portaled calendar / overlays live on document.body above this sheet
+    if (document.body.dataset.pickerOpen === '1') return
     const target = e.target as HTMLElement
-    // Don't start sheet drag from interactive controls inside content
-    if (target.closest('input, textarea, select, button, a, [role="slider"], [data-no-drag]')) {
-      // Allow handle button itself
-      if (!target.closest('[data-sheet-handle]')) return
+    // Interactive controls — except the sheet handle, which must drag
+    if (target.closest('input, textarea, select, a, [role="slider"], [data-no-drag]')) {
+      return
     }
-    // Only drag from handle or peek chrome unless content is at scroll top
+    if (target.closest('button') && !target.closest('[data-sheet-handle]')) {
+      return
+    }
+
     const fromHandle = !!target.closest('[data-sheet-handle]')
-    const scroller = rootRef.current?.querySelector('[data-sheet-scroll]') as HTMLElement | null
+    const scroller = scrollRef.current
     const atTop = !scroller || scroller.scrollTop <= 0
     if (!fromHandle && !atTop) return
     if (!fromHandle && !target.closest('[data-sheet-chrome]')) return
@@ -247,19 +257,21 @@ export default function BottomSheet({
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     const d = drag.current
     if (!d) return
-    const dy = d.startY - e.clientY // up = taller
+    const dy = d.startY - e.clientY
     if (!d.moved && Math.abs(d.startY - e.clientY) < DRAG_THRESHOLD) return
     if (!d.moved) {
       d.moved = true
+      skipHandleClick.current = true
       setDragging(true)
       try {
         e.currentTarget.setPointerCapture(d.pointerId)
-      } catch { /* already captured or released */ }
+      } catch { /* already captured */ }
     }
-    const next = Math.min(maxH, Math.max(heights.peek * 0.85, d.startH + dy))
+    e.preventDefault()
+    const next = Math.min(maxH, Math.max(heights.peek * 0.88, d.startH + dy))
     const now = performance.now()
     const dt = Math.max(1, now - d.lastT)
-    d.velocity = (e.clientY - d.lastY) / dt // down positive
+    d.velocity = (e.clientY - d.lastY) / dt
     d.lastY = e.clientY
     d.lastT = now
     heightRef.current = next
@@ -271,27 +283,25 @@ export default function BottomSheet({
     if (!d) return
     drag.current = null
     if (!d.moved) {
-      // Pure tap — leave snap to the handle button onClick cycle
       setDragging(false)
       return
     }
     const v = d.velocity
     setDragging(false)
     if (fitContent && fitH > 0) {
-      // Planning mode: settle back to content height unless flicked toward full
       if (v < -VELOCITY_FLICK || heightRef.current > (fitH + maxH) / 2) {
         commitSnap('full')
       } else {
-        commitSnap('half') // half + fitContent → content height
+        commitSnap('half')
       }
       return
     }
-    const next = nearestSnap(heightRef.current, heights, v)
-    commitSnap(next)
+    commitSnap(nearestSnap(heightRef.current, heights, v))
   }
 
   const translate = maxH - height
   const duration = dragging || preferReducedMotion() ? 0 : SNAP_MS
+  const lockScroll = snap === 'peek' && !fitContent
 
   return (
     <div
@@ -308,7 +318,7 @@ export default function BottomSheet({
         height: maxH,
         transform: `translate3d(0, ${translate}px, 0)`,
         transition: duration ? `transform ${duration}ms ${EASE}` : 'none',
-        // Handle-only peek: safe-area on the handle. Raised sheet: pad the root again.
+        willChange: 'transform',
         paddingBottom: handleOnlyPeek && snap === 'peek'
           ? 0
           : 'env(safe-area-inset-bottom, 0px)',
@@ -328,7 +338,6 @@ export default function BottomSheet({
         data-sheet-chrome
         className={cn(
           'flex shrink-0 cursor-grab justify-center px-0 pt-1.5 active:cursor-grabbing',
-          // Collapsed after routes: pad handle with home-indicator inset
           handleOnlyPeek && snap === 'peek'
             ? 'pb-[max(0.25rem,env(safe-area-inset-bottom,0px))]'
             : 'pb-1',
@@ -340,11 +349,11 @@ export default function BottomSheet({
           data-sheet-handle
           className="min-h-11 min-w-[44px] cursor-grab border-0 bg-transparent px-8 py-3 active:scale-[0.97] active:cursor-grabbing"
           aria-label={`Sheet ${snap}. Drag to resize.`}
-          onPointerDown={e => {
-            // Keep taps for snap-cycle; drag still works from the chrome strip around the pill
-            e.stopPropagation()
-          }}
           onClick={() => {
+            if (skipHandleClick.current) {
+              skipHandleClick.current = false
+              return
+            }
             if (fitContent) {
               commitSnap(snap === 'full' ? 'half' : 'full')
               return
@@ -354,16 +363,18 @@ export default function BottomSheet({
             commitSnap(cycle[(i + 1) % cycle.length])
           }}
         >
-          <span className="mx-auto block h-1 w-10 rounded-full bg-mint/35" />
+          <span className="mx-auto block h-1 w-10 rounded-full bg-mint/35 transition-colors duration-150" />
         </button>
       </div>
 
       <div
+        ref={scrollRef}
         data-sheet-scroll
         className={cn(
-          'flex touch-pan-y flex-col gap-3 overscroll-contain px-5 pt-0',
-          // fitContent: hug children (no flex stretch gap above footer)
-          fitContent ? 'shrink-0' : 'min-h-0 flex-1 overflow-y-auto',
+          'flex flex-col gap-3 overscroll-contain px-5 pt-0',
+          fitContent ? 'shrink-0' : 'min-h-0 flex-1',
+          // Peek: no vertical scroll (horizontal route swipe still works via pan-x on cards)
+          lockScroll ? 'overflow-hidden' : 'overflow-y-auto touch-pan-y',
           footer ? 'pb-2' : 'pb-4',
         )}
         style={{ WebkitOverflowScrolling: 'touch' }}

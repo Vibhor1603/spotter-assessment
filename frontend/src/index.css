@@ -68,6 +68,17 @@
   - MapLibre third-party chrome
   - range input vendor pseudo-elements
 */
+@layer utilities {
+  /* Horizontal route strip in mobile peek — hide scrollbar, keep momentum scroll */
+  .sheet-h-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .sheet-h-scroll::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @layer components {
   .maplibregl-ctrl-group {
     @apply !overflow-hidden !rounded-[10px] !border !border-line !bg-ink/90 !shadow-[0_8px_24px_rgba(0,0,0,0.35)];

@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { geocode } from '../lib/api'
 import { cn } from '../lib/cn'
 import type { Place } from '../lib/types'
@@ -17,7 +18,10 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected,
   const [hits, setHits] = useState<Place[]>([])
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [menuBox, setMenuBox] = useState<{ top: number; left: number; width: number } | null>(null)
   const box = useRef<HTMLDivElement>(null)
+  const fieldRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLUListElement>(null)
   const active = useRef(false)
 
   useEffect(() => {
@@ -47,16 +51,74 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected,
     return () => clearTimeout(t)
   }, [value, selected])
 
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      if (!box.current?.contains(e.target as Node)) {
-        setOpen(false)
-        active.current = false
-      }
+  useLayoutEffect(() => {
+    if (!open || !hits.length) {
+      setMenuBox(null)
+      return
     }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
+    function place() {
+      const el = fieldRef.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      const width = Math.min(Math.max(r.width, 240), window.innerWidth - 24)
+      let left = r.left
+      if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12
+      if (left < 12) left = 12
+      setMenuBox({ top: r.bottom + 4, left, width })
+    }
+    place()
+    window.addEventListener('resize', place)
+    // Sheet transform uses scroll — keep menu glued to the field
+    document.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      document.removeEventListener('scroll', place, true)
+    }
+  }, [open, hits.length, value])
+
+  useEffect(() => {
+    function onDoc(e: PointerEvent) {
+      const t = e.target as Node
+      if (box.current?.contains(t)) return
+      if (menuRef.current?.contains(t)) return
+      setOpen(false)
+      active.current = false
+    }
+    document.addEventListener('pointerdown', onDoc, true)
+    return () => document.removeEventListener('pointerdown', onDoc, true)
   }, [])
+
+  const menu = open && hits.length > 0 && menuBox
+    ? createPortal(
+        <ul
+          ref={menuRef}
+          data-no-drag
+          className="fixed z-[90] max-h-[min(220px,40dvh)] animate-pop list-none overflow-auto rounded-xl border border-line-strong bg-surface-2/95 p-1.5 shadow-[0_20px_48px_rgba(0,0,0,0.5)] backdrop-blur-xl"
+          role="listbox"
+          style={{ top: menuBox.top, left: menuBox.left, width: menuBox.width }}
+        >
+          {hits.map((p, i) => (
+            <li key={`${p.lon},${p.lat},${i}`}>
+              <button
+                type="button"
+                role="option"
+                className="min-h-11 w-full cursor-pointer rounded-lg border-0 bg-transparent px-3 py-2.5 text-left font-sans text-[13px] font-normal text-mist transition-colors duration-120 ease-out-strong hover:bg-teal/30 active:scale-[0.99]"
+                onClick={() => {
+                  onChange(p.name)
+                  onSelect(p)
+                  setOpen(false)
+                  setHits([])
+                  active.current = false
+                }}
+              >
+                {p.name}
+              </button>
+            </li>
+          ))}
+        </ul>,
+        document.body,
+      )
+    : null
 
   return (
     <div className="relative grid grid-cols-[28px_1fr] items-start gap-2 px-3.5 pb-2 pt-2.5" ref={box}>
@@ -73,7 +135,7 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected,
           {mark}
         </span>
       )}
-      <div className="min-w-0">
+      <div className="min-w-0" ref={fieldRef}>
         <label
           htmlFor={listId}
           className="mb-0.5 block text-[10px] font-semibold uppercase tracking-[0.04em] text-muted"
@@ -110,31 +172,7 @@ export default function PlaceInput({ label, value, onChange, onSelect, selected,
           </p>
         )}
       </div>
-      {open && hits.length > 0 && (
-        <ul
-          className="absolute left-3 right-3 top-[calc(100%-4px)] z-30 max-h-[220px] animate-pop list-none overflow-auto rounded-xl border border-line-strong bg-surface-2/95 p-1.5 shadow-[0_20px_48px_rgba(0,0,0,0.5)] backdrop-blur-xl"
-          role="listbox"
-        >
-          {hits.map((p, i) => (
-            <li key={`${p.lon},${p.lat},${i}`}>
-              <button
-                type="button"
-                role="option"
-                className="min-h-9 w-full cursor-pointer rounded-lg border-0 bg-transparent px-3 py-2 text-left font-sans text-[13px] font-normal text-mist transition-colors duration-120 ease-out-strong hover:bg-teal/30"
-                onClick={() => {
-                  onChange(p.name)
-                  onSelect(p)
-                  setOpen(false)
-                  setHits([])
-                  active.current = false
-                }}
-              >
-                {p.name}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {menu}
     </div>
   )
 }
